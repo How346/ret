@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "include": ["./**/*.ts", "./**/*.tsx", "../src/**/*.ts", "../src/**/*.tsx"],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../src/*"]
+    },
+    "noEmit": true
+  }
+}
