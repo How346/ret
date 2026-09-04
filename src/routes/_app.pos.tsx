@@ -271,7 +271,7 @@ function POS() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, [cart.length, payOpen]);
 
 
   useEffect(() => { searchRef.current?.focus(); }, []);
