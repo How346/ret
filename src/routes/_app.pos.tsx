@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, useDeferredValue } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -50,6 +50,9 @@ function POS() {
   const { user } = useAuth();
   const { data: settings } = useStoreSettings();
   const [search, setSearch] = useState("");
+  // Keep typing on the UI thread. Filtering a large product catalogue is deferred
+  // so barcode/scanner and keyboard input never waits for React to render results.
+  const deferredSearch = useDeferredValue(search);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [billDiscount, setBillDiscount] = useState(0);
   const [priceLevel, setPriceLevel] = useState<PriceLevel>("sale");
@@ -96,19 +99,33 @@ function POS() {
     },
   });
 
-  // Products that have an image are surfaced first in the POS grid.
-  const imagesFirst = useCallback((list: Product[]) =>
-    [...list].sort((a, b) => (a.image_url ? 0 : 1) - (b.image_url ? 0 : 1)), []);
+  // Prepare the catalogue once per data refresh. The old implementation sorted
+  // and normalized the whole catalogue on every keystroke, which can make the
+  // Electron renderer appear frozen on slower Windows PCs.
+  const indexedProducts = useMemo(() => {
+    return products
+      .map(p => ({
+        product: p,
+        name: p.name.toLowerCase(),
+        sku: p.sku?.toLowerCase() ?? "",
+        barcode: p.barcode?.toLowerCase() ?? "",
+        hasImage: Boolean(p.image_url),
+      }))
+      .sort((a, b) => Number(b.hasImage) - Number(a.hasImage));
+  }, [products]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return imagesFirst(products).slice(0, 60);
-    return imagesFirst(products.filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      p.sku?.toLowerCase().includes(q) ||
-      p.barcode?.toLowerCase().includes(q)
-    )).slice(0, 60);
-  }, [search, products, imagesFirst]);
+    const q = deferredSearch.trim().toLowerCase();
+    if (!q) return indexedProducts.slice(0, 60).map(x => x.product);
+    const out: Product[] = [];
+    for (const item of indexedProducts) {
+      if (item.name.includes(q) || item.sku.includes(q) || item.barcode.includes(q)) {
+        out.push(item.product);
+        if (out.length >= 60) break;
+      }
+    }
+    return out;
+  }, [deferredSearch, indexedProducts]);
 
   const variantsFor = useCallback(
     (pid: string) => variants.filter(v => v.product_id === pid),

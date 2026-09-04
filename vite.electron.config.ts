@@ -27,5 +27,8 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "dist-electron"),
     emptyOutDir: true,
     target: "chrome120",
+    // The POS is intentionally a single fast startup bundle. Raise the warning
+    // threshold so this performance warning does not obscure real build errors.
+    chunkSizeWarningLimit: 1200,
   },
 });
