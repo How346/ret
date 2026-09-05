@@ -50,8 +50,6 @@ function POS() {
   const { user } = useAuth();
   const { data: settings } = useStoreSettings();
   const [search, setSearch] = useState("");
-  const searchValueRef = useRef("");
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [billDiscount, setBillDiscount] = useState(0);
   const [priceLevel, setPriceLevel] = useState<PriceLevel>("sale");
@@ -181,22 +179,22 @@ function POS() {
   };
 
   const onSearchEnter = () => {
-    const raw = searchValueRef.current.trim();
+    const raw = search.trim();
     if (!raw) { if (cart.length) setPayOpen(true); return; }
     // "N*" or "N*CODE" — sets multiplier for next scan
     const mult = raw.match(/^(\d+)\*(.*)$/);
     if (mult) {
       qtyMultiplierRef.current = Math.max(1, parseInt(mult[1], 10) || 1);
       const rest = mult[2].trim();
-      if (!rest) { searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; setSearch(""); return; }
+      if (!rest) { setSearch(""); return; }
       const p = products.find(pp => pp.barcode?.toLowerCase() === rest.toLowerCase() || pp.sku?.toLowerCase() === rest.toLowerCase());
-      if (p) { addSmart(p, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; setSearch(""); }
+      if (p) { addSmart(p, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); }
       return;
     }
     const q = raw.toLowerCase();
     const exact = products.find(p => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q);
-    if (exact) { addSmart(exact, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; setSearch(""); return; }
-    if (filtered.length === 1) { addSmart(filtered[0], qtyMultiplierRef.current); qtyMultiplierRef.current = 1; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; setSearch(""); }
+    if (exact) { addSmart(exact, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); return; }
+    if (filtered.length === 1) { addSmart(filtered[0], qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); }
   };
 
 
@@ -260,7 +258,14 @@ function POS() {
   // Keyboard shortcuts — Marg-style
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const inField = /INPUT|TEXTAREA|SELECT/.test((e.target as HTMLElement)?.tagName ?? "");
+      const target = e.target as HTMLElement | null;
+      const inField = /INPUT|TEXTAREA|SELECT/.test(target?.tagName ?? "");
+      // Never intercept ordinary text-entry keystrokes. Electron desktop builds
+      // can become unresponsive if a global shortcut handler prevents/handles
+      // every key while an input is focused. Only keep explicit function-key
+      // shortcuts active inside form fields.
+      const isFunctionKey = /^F(?:1|2|3|4|5|6|8)$/.test(e.key);
+      if (inField && !isFunctionKey && !(e.ctrlKey || e.metaKey)) return;
       if (e.key === "F1" || e.key === "F2") { e.preventDefault(); searchRef.current?.focus(); }
       else if (e.key === "F3" || e.key === "End") { e.preventDefault(); const el = document.getElementById("bill-discount"); (el as HTMLInputElement)?.focus(); (el as HTMLInputElement)?.select?.(); }
       else if (e.key === "F4") { e.preventDefault(); if (cart.length) setPayOpen(true); }
@@ -275,9 +280,6 @@ function POS() {
     return () => window.removeEventListener("keydown", onKey);
   }, [cart.length, payOpen]);
 
-  useEffect(() => () => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-  }, []);
 
   useEffect(() => { searchRef.current?.focus(); }, []);
 
@@ -292,13 +294,8 @@ function POS() {
               ref={searchRef}
               placeholder="Scan barcode or search… (F2)"
               className="pl-9 h-11 font-mono"
-              defaultValue=""
-              onChange={e => {
-                const value = e.currentTarget.value;
-                searchValueRef.current = value;
-                if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-                searchTimerRef.current = setTimeout(() => setSearch(value), 60);
-              }}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
               onKeyDown={e => e.key === "Enter" && onSearchEnter()}
             />
           </div>

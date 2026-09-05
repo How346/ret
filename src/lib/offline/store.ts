@@ -115,15 +115,9 @@ export function persist() {
   saveTimer = setTimeout(async () => {
     try {
       const conn = await idb();
-      // IndexedDB already uses the structured-clone algorithm. Do not stringify
-      // the entire database on the renderer/main thread; large image/data-url
-      // stores can otherwise freeze every text input while a save is scheduled.
-      const snapshot = {
-        tables: db.tables,
-        meta: db.meta,
-        files: db.files,
-        users: db.users,
-      };
+      // structuredClone is substantially faster and avoids the repeated
+      // JSON stringify/parse CPU spike that can freeze Electron during UI work.
+      const snapshot = structuredClone(db);
       conn.transaction(STORE, "readwrite").objectStore(STORE).put(snapshot, KEY);
     } catch (e) {
       console.error("[offline-db] persist failed", e);

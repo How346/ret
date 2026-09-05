@@ -27,5 +27,6 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "dist-electron"),
     emptyOutDir: true,
     target: "chrome120",
+    chunkSizeWarningLimit: 1000,
   },
 });
