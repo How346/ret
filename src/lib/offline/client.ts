@@ -275,16 +275,12 @@ const auth = {
   async getSession() {
     await ready();
     if (!session) session = readStoredSession();
-    // Never restore a stale/corrupt session for a deleted local account.
-    if (session && !db.users.some((u) => u.id === session!.user.id && u.email === session!.user.email)) {
-      session = null;
-      try { localStorage.removeItem(SESSION_KEY); } catch {}
-    }
     return { data: { session }, error: null };
   },
   async getUser() {
-    const { data } = await this.getSession();
-    return { data: { user: data.session?.user ?? null }, error: null };
+    await ready();
+    if (!session) session = readStoredSession();
+    return { data: { user: session?.user ?? null }, error: null };
   },
   onAuthStateChange(cb: (event: string, session: LocalSession) => void) {
     listeners.add(cb);
@@ -316,7 +312,7 @@ const auth = {
       full_name: options?.data?.full_name ?? e.split("@")[0], created_at: new Date().toISOString(),
     };
     db.users.push(user);
-    const first = db.users.length === 1;
+    const first = table("profiles").length === 0;
     table("profiles").push(withDefaults("profiles", { id: user.id, full_name: user.full_name }));
     table("user_roles").push(withDefaults("user_roles", { user_id: user.id, role: first ? "admin" : "cashier" }));
     persist();

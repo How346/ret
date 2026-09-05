@@ -110,39 +110,25 @@ async function load(): Promise<DbShape | null> {
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
-let saveRunning = false;
-let saveAgain = false;
-
-// Persistence is deliberately throttled. JSON-cloning a database containing
-// product/customer data (and especially image data) on the renderer thread can
-// cause visible typing/input stalls. Mutations are coalesced into one snapshot.
 export function persist() {
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { void flushPersist(); }, 600);
-}
-
-async function flushPersist() {
-  if (saveRunning) {
-    saveAgain = true;
-    return;
-  }
-  saveRunning = true;
-  saveAgain = false;
-  try {
-    // structuredClone is native and avoids the JSON stringify/parse round trip.
-    const snapshot = typeof structuredClone === "function"
-      ? structuredClone(db)
-      : JSON.parse(JSON.stringify(db));
-    const conn = await idb();
-    conn.transaction(STORE, "readwrite").objectStore(STORE).put(snapshot, KEY);
-  } catch (e) {
-    console.error("[offline-db] persist failed", e);
-  } finally {
-    saveRunning = false;
-    if (saveAgain) {
-      saveTimer = setTimeout(() => { void flushPersist(); }, 600);
+  saveTimer = setTimeout(async () => {
+    try {
+      const conn = await idb();
+      // IndexedDB already uses the structured-clone algorithm. Do not stringify
+      // the entire database on the renderer/main thread; large image/data-url
+      // stores can otherwise freeze every text input while a save is scheduled.
+      const snapshot = {
+        tables: db.tables,
+        meta: db.meta,
+        files: db.files,
+        users: db.users,
+      };
+      conn.transaction(STORE, "readwrite").objectStore(STORE).put(snapshot, KEY);
+    } catch (e) {
+      console.error("[offline-db] persist failed", e);
     }
-  }
+  }, 250);
 }
 
 function seed() {

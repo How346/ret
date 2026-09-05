@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -49,20 +49,15 @@ function POS() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const { data: settings } = useStoreSettings();
-  // The search field is intentionally UNCONTROLLED. React controlled inputs can
-  // become visibly stuck when this POS page has a large catalogue. The browser
-  // paints each typed character immediately; React only receives a debounced
-  // copy for filtering. Barcode scanners still work because Enter reads the
-  // latest value directly from the ref.
-  const searchRef = useRef<HTMLInputElement>(null);
+  const [search, setSearch] = useState("");
   const searchValueRef = useRef("");
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [billDiscount, setBillDiscount] = useState(0);
   const [priceLevel, setPriceLevel] = useState<PriceLevel>("sale");
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [payOpen, setPayOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   // Products
   const { data: products = [] } = useQuery({
@@ -103,44 +98,19 @@ function POS() {
     },
   });
 
-  // Prepare the catalogue once per data refresh. The old implementation sorted
-  // and normalized the whole catalogue on every keystroke, which can make the
-  // Electron renderer appear frozen on slower Windows PCs.
-  const indexedProducts = useMemo(() => products.map(p => ({
-    product: p,
-    name: String(p.name ?? "").toLowerCase(),
-    sku: String(p.sku ?? "").toLowerCase(),
-    barcode: String(p.barcode ?? "").toLowerCase(),
-  })), [products]);
+  // Products that have an image are surfaced first in the POS grid.
+  const imagesFirst = useCallback((list: Product[]) =>
+    [...list].sort((a, b) => (a.image_url ? 0 : 1) - (b.image_url ? 0 : 1)), []);
 
   const filtered = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return indexedProducts.slice(0, 24).map(x => x.product);
-    const out: Product[] = [];
-    for (const item of indexedProducts) {
-      if (item.name.includes(q) || item.sku.includes(q) || item.barcode.includes(q)) {
-        out.push(item.product);
-        if (out.length >= 30) break;
-      }
-    }
-    return out;
-  }, [searchQuery, indexedProducts]);
-
-  const clearSearch = useCallback(() => {
-    searchValueRef.current = "";
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    setSearchQuery("");
-    if (searchRef.current) searchRef.current.value = "";
-  }, []);
-
-  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    searchValueRef.current = value;
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    searchTimerRef.current = setTimeout(() => {
-      setSearchQuery(searchValueRef.current);
-    }, 80);
-  }, []);
+    const q = search.trim().toLowerCase();
+    if (!q) return imagesFirst(products).slice(0, 60);
+    return imagesFirst(products.filter(p =>
+      p.name.toLowerCase().includes(q) ||
+      p.sku?.toLowerCase().includes(q) ||
+      p.barcode?.toLowerCase().includes(q)
+    )).slice(0, 60);
+  }, [search, products, imagesFirst]);
 
   const variantsFor = useCallback(
     (pid: string) => variants.filter(v => v.product_id === pid),
@@ -218,15 +188,15 @@ function POS() {
     if (mult) {
       qtyMultiplierRef.current = Math.max(1, parseInt(mult[1], 10) || 1);
       const rest = mult[2].trim();
-      if (!rest) { clearSearch(); return; }
+      if (!rest) { searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; setSearch(""); return; }
       const p = products.find(pp => pp.barcode?.toLowerCase() === rest.toLowerCase() || pp.sku?.toLowerCase() === rest.toLowerCase());
-      if (p) { addSmart(p, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; clearSearch(); }
+      if (p) { addSmart(p, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; setSearch(""); }
       return;
     }
     const q = raw.toLowerCase();
     const exact = products.find(p => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q);
-    if (exact) { addSmart(exact, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; clearSearch(); return; }
-    if (filtered.length === 1) { addSmart(filtered[0], qtyMultiplierRef.current); qtyMultiplierRef.current = 1; clearSearch(); }
+    if (exact) { addSmart(exact, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; setSearch(""); return; }
+    if (filtered.length === 1) { addSmart(filtered[0], qtyMultiplierRef.current); qtyMultiplierRef.current = 1; searchValueRef.current = ""; if (searchRef.current) searchRef.current.value = ""; setSearch(""); }
   };
 
 
@@ -305,13 +275,11 @@ function POS() {
     return () => window.removeEventListener("keydown", onKey);
   }, [cart.length, payOpen]);
 
-
-  useEffect(() => {
-    searchRef.current?.focus();
-    return () => {
-      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    };
+  useEffect(() => () => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
   }, []);
+
+  useEffect(() => { searchRef.current?.focus(); }, []);
 
   return (
     <div className="h-[calc(100vh-3rem)] grid grid-cols-12 gap-3 p-3 bg-background">
@@ -325,7 +293,12 @@ function POS() {
               placeholder="Scan barcode or search… (F2)"
               className="pl-9 h-11 font-mono"
               defaultValue=""
-              onChange={handleSearchChange}
+              onChange={e => {
+                const value = e.currentTarget.value;
+                searchValueRef.current = value;
+                if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+                searchTimerRef.current = setTimeout(() => setSearch(value), 60);
+              }}
               onKeyDown={e => e.key === "Enter" && onSearchEnter()}
             />
           </div>
@@ -351,7 +324,7 @@ function POS() {
                   className="text-left rounded-lg border border-border bg-card hover:border-primary hover:shadow-sm transition p-2.5 group"
                 >
                   {p.image_url ? (
-                    <img src={p.image_url} alt={p.name} loading="lazy" decoding="async" className="w-full h-20 object-cover rounded mb-1.5" />
+                    <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-20 object-cover rounded mb-1.5" />
                   ) : null}
                   <div className="font-medium text-sm leading-tight truncate">{p.name}</div>
                   <div className="text-[11px] text-muted-foreground mt-0.5 font-mono truncate">
