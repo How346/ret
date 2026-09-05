@@ -1,6 +1,5 @@
 // Client-only entry used by the Electron/offline build (see vite.electron.config.ts).
 // The web app is unaffected — it still boots through TanStack Start.
-import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter, createMemoryHistory } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -16,18 +15,16 @@ const queryClient = new QueryClient({
 const router = createRouter({
   routeTree,
   context: { queryClient },
-  history: createMemoryHistory({ initialEntries: ["/pos"] }),
+  history: createMemoryHistory({ initialEntries: ["/login"] }),
   scrollRestoration: true,
   defaultPreloadStaleTime: 0,
 });
 
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <RouterProvider router={router} />
-        <Toaster />
-      </AuthProvider>
-    </QueryClientProvider>
-  </StrictMode>,
+  <QueryClientProvider client={queryClient}>
+    <AuthProvider>
+      <RouterProvider router={router} />
+      <Toaster />
+    </AuthProvider>
+  </QueryClientProvider>,
 );

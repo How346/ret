@@ -22,7 +22,9 @@ function LoginPage() {
   const nameRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (session) nav({ to: "/pos" }); }, [session, nav]);
+  useEffect(() => {
+    if (session) void nav({ to: "/pos", replace: true });
+  }, [session, nav]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -106,7 +108,7 @@ function LoginPage() {
             )}
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>
-              <Input id="email" ref={emailRef} type="email" required autoComplete="username" placeholder="you@store.com" />
+              <Input id="email" ref={emailRef} autoFocus type="email" required autoComplete="username" placeholder="you@store.com" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="pw">Password</Label>

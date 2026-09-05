@@ -6,7 +6,6 @@ const path = require("node:path");
 app.disableHardwareAcceleration();
 
 let mainWindow = null;
-let lastRecoveryAt = 0;
 
 function getIndexPath() {
   // app.getAppPath() is reliable in both development and packaged builds.
@@ -70,11 +69,9 @@ function createWindow() {
 
   mainWindow.on("unresponsive", () => {
     console.error("[electron] renderer became unresponsive");
-    // Recover once per 10 seconds instead of allowing a permanent frozen window.
-    const now = Date.now();
-    if (now - lastRecoveryAt < 10000 || mainWindow.isDestroyed()) return;
-    lastRecoveryAt = now;
-    mainWindow.webContents.reloadIgnoringCache();
+    // Never reload automatically while the user is interacting with the app.
+    // A reload can destroy the focused input and makes keyboard stalls harder
+    // to diagnose. Keep the renderer alive and log the event instead.
   });
 
   mainWindow.on("closed", () => {
