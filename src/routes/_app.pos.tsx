@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback, useDeferredValue } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -49,16 +49,20 @@ function POS() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const { data: settings } = useStoreSettings();
-  const [search, setSearch] = useState("");
-  // Keep typing on the UI thread. Filtering a large product catalogue is deferred
-  // so barcode/scanner and keyboard input never waits for React to render results.
-  const deferredSearch = useDeferredValue(search);
+  // The search field is intentionally UNCONTROLLED. React controlled inputs can
+  // become visibly stuck when this POS page has a large catalogue. The browser
+  // paints each typed character immediately; React only receives a debounced
+  // copy for filtering. Barcode scanners still work because Enter reads the
+  // latest value directly from the ref.
+  const searchRef = useRef<HTMLInputElement>(null);
+  const searchValueRef = useRef("");
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [billDiscount, setBillDiscount] = useState(0);
   const [priceLevel, setPriceLevel] = useState<PriceLevel>("sale");
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [payOpen, setPayOpen] = useState(false);
-  const searchRef = useRef<HTMLInputElement>(null);
 
   // Products
   const { data: products = [] } = useQuery({
@@ -102,30 +106,41 @@ function POS() {
   // Prepare the catalogue once per data refresh. The old implementation sorted
   // and normalized the whole catalogue on every keystroke, which can make the
   // Electron renderer appear frozen on slower Windows PCs.
-  const indexedProducts = useMemo(() => {
-    return products
-      .map(p => ({
-        product: p,
-        name: p.name.toLowerCase(),
-        sku: p.sku?.toLowerCase() ?? "",
-        barcode: p.barcode?.toLowerCase() ?? "",
-        hasImage: Boolean(p.image_url),
-      }))
-      .sort((a, b) => Number(b.hasImage) - Number(a.hasImage));
-  }, [products]);
+  const indexedProducts = useMemo(() => products.map(p => ({
+    product: p,
+    name: String(p.name ?? "").toLowerCase(),
+    sku: String(p.sku ?? "").toLowerCase(),
+    barcode: String(p.barcode ?? "").toLowerCase(),
+  })), [products]);
 
   const filtered = useMemo(() => {
-    const q = deferredSearch.trim().toLowerCase();
-    if (!q) return indexedProducts.slice(0, 60).map(x => x.product);
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return indexedProducts.slice(0, 24).map(x => x.product);
     const out: Product[] = [];
     for (const item of indexedProducts) {
       if (item.name.includes(q) || item.sku.includes(q) || item.barcode.includes(q)) {
         out.push(item.product);
-        if (out.length >= 60) break;
+        if (out.length >= 30) break;
       }
     }
     return out;
-  }, [deferredSearch, indexedProducts]);
+  }, [searchQuery, indexedProducts]);
+
+  const clearSearch = useCallback(() => {
+    searchValueRef.current = "";
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    setSearchQuery("");
+    if (searchRef.current) searchRef.current.value = "";
+  }, []);
+
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    searchValueRef.current = value;
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setSearchQuery(searchValueRef.current);
+    }, 80);
+  }, []);
 
   const variantsFor = useCallback(
     (pid: string) => variants.filter(v => v.product_id === pid),
@@ -196,22 +211,22 @@ function POS() {
   };
 
   const onSearchEnter = () => {
-    const raw = search.trim();
+    const raw = searchValueRef.current.trim();
     if (!raw) { if (cart.length) setPayOpen(true); return; }
     // "N*" or "N*CODE" — sets multiplier for next scan
     const mult = raw.match(/^(\d+)\*(.*)$/);
     if (mult) {
       qtyMultiplierRef.current = Math.max(1, parseInt(mult[1], 10) || 1);
       const rest = mult[2].trim();
-      if (!rest) { setSearch(""); return; }
+      if (!rest) { clearSearch(); return; }
       const p = products.find(pp => pp.barcode?.toLowerCase() === rest.toLowerCase() || pp.sku?.toLowerCase() === rest.toLowerCase());
-      if (p) { addSmart(p, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); }
+      if (p) { addSmart(p, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; clearSearch(); }
       return;
     }
     const q = raw.toLowerCase();
     const exact = products.find(p => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q);
-    if (exact) { addSmart(exact, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); return; }
-    if (filtered.length === 1) { addSmart(filtered[0], qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); }
+    if (exact) { addSmart(exact, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; clearSearch(); return; }
+    if (filtered.length === 1) { addSmart(filtered[0], qtyMultiplierRef.current); qtyMultiplierRef.current = 1; clearSearch(); }
   };
 
 
@@ -291,7 +306,12 @@ function POS() {
   }, [cart.length, payOpen]);
 
 
-  useEffect(() => { searchRef.current?.focus(); }, []);
+  useEffect(() => {
+    searchRef.current?.focus();
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, []);
 
   return (
     <div className="h-[calc(100vh-3rem)] grid grid-cols-12 gap-3 p-3 bg-background">
@@ -304,8 +324,8 @@ function POS() {
               ref={searchRef}
               placeholder="Scan barcode or search… (F2)"
               className="pl-9 h-11 font-mono"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
+              defaultValue=""
+              onChange={handleSearchChange}
               onKeyDown={e => e.key === "Enter" && onSearchEnter()}
             />
           </div>
@@ -331,7 +351,7 @@ function POS() {
                   className="text-left rounded-lg border border-border bg-card hover:border-primary hover:shadow-sm transition p-2.5 group"
                 >
                   {p.image_url ? (
-                    <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-20 object-cover rounded mb-1.5" />
+                    <img src={p.image_url} alt={p.name} loading="lazy" decoding="async" className="w-full h-20 object-cover rounded mb-1.5" />
                   ) : null}
                   <div className="font-medium text-sm leading-tight truncate">{p.name}</div>
                   <div className="text-[11px] text-muted-foreground mt-0.5 font-mono truncate">
