@@ -556,18 +556,7 @@ function POS() {
             qc.invalidateQueries({ queryKey: ["products", "pos"] });
             setPayOpen(false);
             clearBill();
-            // Re-read the customer after saving. This is important when the
-            // customer was just created in the same POS session: React Query
-            // may still be showing the previous customer list for a moment.
-            let customer: any = customers.find((c: any) => c.id === customerId) ?? null;
-            if (customerId) {
-              const { data: freshCustomer } = await supabase
-                .from("customers")
-                .select("id,name,phone,gstin")
-                .eq("id", customerId)
-                .maybeSingle();
-              if (freshCustomer) customer = freshCustomer;
-            }
+            const customer = customers.find((c: any) => c.id === customerId) ?? null;
 
             const receiptArgs = {
               invoiceNo: invNo as unknown as string,
@@ -877,7 +866,7 @@ function WhatsAppSendDialog({
             }}
           >
             {connecting && <Loader2 className="h-4 w-4 animate-spin" />}
-            Open WhatsApp Web (scan QR / login)
+            Open WhatsApp Web in browser (scan QR / login)
           </Button>
           <div>
             <Label>WhatsApp number</Label>
@@ -889,8 +878,8 @@ function WhatsAppSendDialog({
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            First time only: log in above by scanning the QR code. After that, "Send" will open the
-            customer's chat in that same WhatsApp Web session with the bill image copied to your
+            First time only: log in above by scanning the QR code in your browser. After that, "Send"
+            will open the customer's chat in your default browser with the bill image copied to your
             clipboard — just paste (Ctrl+V) it into the chat and press send.
           </p>
         </div>
@@ -902,13 +891,13 @@ function WhatsAppSendDialog({
               if (!ask) return;
               setSending(true);
               try {
-                const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, countryCode: settings?.whatsapp_country_code, message: ask.message, paperSize });
+                const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
                 if (res.success) {
-                  toast.success(res.mode === "external-browser"
-                    ? "WhatsApp Web opened — paste the image (Ctrl+V) and send"
+                  toast.success(res.mode === "desktop-browser"
+                    ? "WhatsApp Web opened in your browser — paste the image (Ctrl+V) and send"
                     : "WhatsApp opened");
                 } else {
-                  toast.error(res.errorType === "missing-phone" ? "Please enter a valid WhatsApp number" : `Couldn't open WhatsApp (${res.errorType || "browser error"})`);
+                  toast.error("Couldn't open WhatsApp — check the number and try again");
                 }
               } finally {
                 setSending(false);

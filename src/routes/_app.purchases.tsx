@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Trash2, ShoppingCart, Eye, Scan, Pencil, Search, Package } from "lucide-react";
+import { Plus, Trash2, ShoppingCart, Eye, Scan, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { inr } from "@/lib/format";
 
@@ -147,15 +147,13 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
   const [items, setItems] = useState<LineItem[]>([emptyRow()]);
   const [barcode, setBarcode] = useState("");
   const [quickAdd, setQuickAdd] = useState<{ barcode: string } | null>(null);
-  const [allItemsOpen, setAllItemsOpen] = useState(false);
-  const [itemSearch, setItemSearch] = useState("");
   const barcodeRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { barcodeRef.current?.focus(); }, []);
 
   // ---- Marg-style keyboard flow: Enter walks the row, End saves ----
   const cellRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const COLS = ["hsn", "qty", "cost", "mrp", "sale", "gst"] as const;
+  const COLS = ["barcode", "hsn", "qty", "cost", "mrp", "sale", "gst"] as const;
   const setCell = (idx: number, col: string) => (el: HTMLInputElement | null) => {
     cellRefs.current[`${idx}:${col}`] = el;
   };
@@ -347,23 +345,6 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
       <DialogContent
         className="max-w-5xl max-h-[92vh] flex flex-col overflow-hidden"
         onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "i") {
-            e.preventDefault();
-            setAllItemsOpen(true);
-            setItemSearch("");
-            return;
-          }
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-            e.preventDefault();
-            if (!save.isPending) save.mutate();
-            return;
-          }
-          if (e.key === "F2") {
-            e.preventDefault();
-            barcodeRef.current?.focus();
-            barcodeRef.current?.select();
-            return;
-          }
           if (e.key === "End" && !save.isPending) { e.preventDefault(); save.mutate(); }
         }}
       >
@@ -386,12 +367,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="mt-3 rounded-md border border-primary/40 bg-primary/5 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <Label className="text-xs uppercase tracking-wide flex items-center gap-1"><Scan className="h-3.5 w-3.5" /> Scan / Enter Barcode</Label>
-            <Button type="button" variant="outline" size="sm" onClick={() => { setAllItemsOpen(true); setItemSearch(""); }}>
-              <Package className="h-3.5 w-3.5 mr-1" /> All Items <kbd className="ml-1 text-[10px]">Ctrl+I</kbd>
-            </Button>
-          </div>
+          <Label className="text-xs uppercase tracking-wide flex items-center gap-1"><Scan className="h-3.5 w-3.5" /> Scan / Enter Barcode</Label>
           <Input
             ref={barcodeRef}
             value={barcode}
@@ -428,11 +404,34 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
                 return (
                   <TableRow key={idx}>
                     <TableCell>
-                      <div className={i.product_id ? "text-sm font-medium" : "text-sm text-muted-foreground"}>
-                        {i.product_name || "Scan barcode to add item"}
-                      </div>
+                      <Select
+                        value={i.product_id ?? ""}
+                        onValueChange={(v) => {
+                          const p = products.find((x) => x.id === v);
+                          if (p) {
+                            upd(idx, {
+                              product_id: p.id, product_name: p.name, barcode: p.barcode ?? "",
+                              hsn_code: p.hsn_code ?? "",
+                              cost: String(Number(p.purchase_price) || 0),
+                              mrp: String(Number(p.mrp) || 0),
+                              sale_price: String(Number(p.sale_price) || 0),
+                              gst_rate: String(Number(p.gst_rate) || 0),
+                            });
+                            setItems((arr) => ensureTrailingRow(arr));
+                            setTimeout(() => {
+                              const el = cellRefs.current[`${idx}:qty`];
+                              el?.focus(); el?.select();
+                            }, 30);
+                          }
+                        }}
+                      >
+                        <SelectTrigger><SelectValue placeholder={i.product_name || "Pick product"} /></SelectTrigger>
+                        <SelectContent>
+                          {products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
                     </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{i.barcode || "—"}</TableCell>
+                    <TableCell><Input ref={setCell(idx, "barcode")} onKeyDown={cellKeyDown(idx, "barcode")} className="font-mono text-xs" value={i.barcode} onChange={(e) => upd(idx, { barcode: e.target.value })} /></TableCell>
                     <TableCell><Input ref={setCell(idx, "hsn")} onKeyDown={cellKeyDown(idx, "hsn")} value={i.hsn_code} onChange={(e) => upd(idx, { hsn_code: e.target.value })} /></TableCell>
                     <TableCell><Input ref={setCell(idx, "qty")} onKeyDown={cellKeyDown(idx, "qty")} inputMode="decimal" value={i.qty} onChange={(e) => upd(idx, { qty: e.target.value })} /></TableCell>
                     <TableCell><Input ref={setCell(idx, "cost")} onKeyDown={cellKeyDown(idx, "cost")} inputMode="decimal" value={i.cost} onChange={(e) => upd(idx, { cost: e.target.value })} /></TableCell>
@@ -484,7 +483,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         <DialogFooter className="sm:justify-between border-t pt-3 mt-1 shrink-0 bg-background">
 
           <div className="text-xs text-muted-foreground self-center">
-            Enter = next field · F2 = scan · Ctrl+I = all items · Ctrl+S = save
+            Enter = next field · after GST% jumps back to scan · End = Save Purchase
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -493,15 +492,6 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         </DialogFooter>
 
       </DialogContent>
-
-      <AllItemsDialog
-        open={allItemsOpen}
-        products={products}
-        search={itemSearch}
-        setSearch={setItemSearch}
-        onClose={() => { setAllItemsOpen(false); setTimeout(() => { barcodeRef.current?.focus(); barcodeRef.current?.select(); }, 30); }}
-        onPick={(p) => { addProductLine(p); setTimeout(() => { barcodeRef.current?.focus(); barcodeRef.current?.select(); }, 30); }}
-      />
 
       {quickAdd && (
         <QuickAddProductDialog
@@ -517,72 +507,6 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         />
       )}
     </>
-  );
-}
-
-
-function AllItemsDialog({
-  open, products, search, setSearch, onClose, onPick,
-}: {
-  open: boolean;
-  products: Product[];
-  search: string;
-  setSearch: (v: string) => void;
-  onClose: () => void;
-  onPick: (p: Product) => void;
-}) {
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return products;
-    return products.filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      (p.barcode ?? "").toLowerCase().includes(q),
-    );
-  }, [products, search]);
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>All Items</DialogTitle>
-          <p className="text-xs text-muted-foreground">Barcode scanning is the fastest method. Use this list only when you need to pick an item manually.</p>
-        </DialogHeader>
-        <div className="relative">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            autoFocus
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === "Enter" && filtered[0]) {
-                e.preventDefault();
-                onPick(filtered[0]);
-                onClose();
-              }
-            }}
-            placeholder="Search item name or barcode…"
-            className="pl-9"
-          />
-        </div>
-        <div className="max-h-[55vh] overflow-auto rounded-md border">
-          {filtered.map(p => (
-            <button
-              key={p.id}
-              type="button"
-              className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-accent border-b last:border-b-0"
-              onClick={() => { onPick(p); onClose(); }}
-            >
-              <span className="min-w-0">
-                <span className="block font-medium truncate">{p.name}</span>
-                <span className="block text-xs text-muted-foreground font-mono">{p.barcode || "No barcode"}</span>
-              </span>
-              <span className="text-right shrink-0 text-xs">Cost {inr(p.purchase_price)}<br />Stock {p.stock}</span>
-            </button>
-          ))}
-          {filtered.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No items found.</div>}
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }
 

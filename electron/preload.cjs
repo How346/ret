@@ -16,18 +16,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Resolves to { success: boolean, errorType?: string }.
   printHTML: (html, options) => ipcRenderer.invoke("print:html", { html, options }),
 
-  // Opens WhatsApp Web in the browser selected in Settings.
-  // WhatsApp is never embedded inside Electron.
-  openWhatsAppWeb: (browserId) => ipcRenderer.invoke("whatsapp:open-web", { browserId }),
+  // Renders a receipt/bill HTML string to an image and copies it to the
+  // clipboard, ready to paste — see openWhatsAppWeb/sendReceiptWhatsAppWeb
+  // below for the actual WhatsApp Web send flow.
+  // Opens WhatsApp Web in the user's own default browser on this PC (not an
+  // embedded window) so they can scan the QR code and log in, same as
+  // opening web.whatsapp.com in any ordinary browser tab.
+  // Resolves to { success: boolean, errorType?: string }.
+  openWhatsAppWeb: () => ipcRenderer.invoke("whatsapp:open-web"),
 
-  // Returns browsers detected on this PC.
-  listWhatsAppBrowsers: () => ipcRenderer.invoke("whatsapp:browsers"),
-
-  // Captures the bill HTML as an image (copied to the clipboard), then
-  // navigates the same logged-in WhatsApp Web window straight to the given
-  // phone number's chat with the message pre-filled. The cashier pastes
-  // (Ctrl+V) the image into the chat and sends it themselves.
+  // Captures the bill HTML as an image (copied to the clipboard), then opens
+  // the given phone number's WhatsApp Web chat in the user's default
+  // browser with the message pre-filled. The cashier pastes (Ctrl+V) the
+  // image into the chat and sends it themselves.
   // Resolves to { success: boolean, errorType?: string, imaged?: boolean }.
-  sendReceiptWhatsAppWeb: (html, phone, message, widthPx, browserId) =>
-    ipcRenderer.invoke("whatsapp:send-web", { html, phone, message, widthPx, browserId }),
+  sendReceiptWhatsAppWeb: (html, phone, message, widthPx) =>
+    ipcRenderer.invoke("whatsapp:send-web", { html, phone, message, widthPx }),
 });

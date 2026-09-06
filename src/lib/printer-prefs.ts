@@ -18,14 +18,12 @@ type ElectronPrintAPI = {
     html: string,
     options?: { deviceName?: string; silent?: boolean; copies?: number },
   ) => Promise<{ success: boolean; errorType?: string }>;
-  openWhatsAppWeb: (browserId?: string) => Promise<{ success: boolean; errorType?: string }>;
-  listWhatsAppBrowsers: () => Promise<{ id: string; name: string }[]>;
+  openWhatsAppWeb: () => Promise<{ success: boolean; errorType?: string }>;
   sendReceiptWhatsAppWeb: (
     html: string,
     phone: string,
     message: string,
     widthPx?: number,
-    browserId?: string,
   ) => Promise<{ success: boolean; errorType?: string; imaged?: boolean }>;
 };
 
