@@ -25,7 +25,12 @@ export function normalizeWhatsAppPhone(raw: string, countryCode: string | null |
   return digits;
 }
 
-export type SendReceiptResult = { success: boolean; mode: "desktop-browser" | "web-text-only"; errorType?: string };
+export type SendReceiptResult = {
+  success: boolean;
+  mode: "desktop-browser" | "web-text-only";
+  imaged?: boolean;
+  errorType?: string;
+};
 
 // Sends the bill over WhatsApp.
 // - Desktop (Electron): captures the receipt as an image (copied to the
@@ -45,7 +50,7 @@ export async function sendReceiptOnWhatsApp(opts: {
   if (isDesktopPrintingAvailable() && window.electronAPI?.sendReceiptWhatsAppWeb) {
     try {
       const res = await window.electronAPI.sendReceiptWhatsAppWeb(opts.html, opts.phone, opts.message, widthPx);
-      return { success: !!res?.success, mode: "desktop-browser", errorType: res?.errorType };
+      return { success: !!res?.success, mode: "desktop-browser", imaged: res?.imaged, errorType: res?.errorType };
     } catch (err: any) {
       return { success: false, mode: "desktop-browser", errorType: String(err?.message || err) };
     }

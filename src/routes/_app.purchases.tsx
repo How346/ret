@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Trash2, ShoppingCart, Eye, Scan, Pencil } from "lucide-react";
+import { Plus, Trash2, ShoppingCart, Eye, Scan, Pencil, List as ListIcon, Search } from "lucide-react";
 import { toast } from "sonner";
 import { inr } from "@/lib/format";
 
@@ -147,6 +147,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
   const [items, setItems] = useState<LineItem[]>([emptyRow()]);
   const [barcode, setBarcode] = useState("");
   const [quickAdd, setQuickAdd] = useState<{ barcode: string } | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const barcodeRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { barcodeRef.current?.focus(); }, []);
@@ -160,6 +161,16 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
   const cellKeyDown = (idx: number, col: string) => (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
+    // The fast scan-driven flow only needs HSN then Qty — once Qty is
+    // confirmed, jump straight back to the barcode box for the next item
+    // instead of continuing through Cost/MRP/Sale/GST (those come
+    // pre-filled from the product master and are edited by clicking in
+    // directly, not as part of the scan loop).
+    if (col === "qty") {
+      setItems((arr) => ensureTrailingRow(arr));
+      setTimeout(() => { barcodeRef.current?.focus(); barcodeRef.current?.select(); }, 30);
+      return;
+    }
     const pos = COLS.indexOf(col as typeof COLS[number]);
     const next = COLS[pos + 1];
     if (next) {
@@ -170,6 +181,12 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
     // End of the row → make sure a blank row exists and jump back to scanning
     setItems((arr) => ensureTrailingRow(arr));
     setTimeout(() => { barcodeRef.current?.focus(); barcodeRef.current?.select(); }, 30);
+  };
+  const focusRowCell = (idx: number, col: string) => {
+    setTimeout(() => {
+      const el = cellRefs.current[`${idx}:${col}`];
+      el?.focus(); el?.select();
+    }, 30);
   };
 
 
@@ -209,11 +226,13 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
     return arr;
   };
 
-  const addProductLine = (p: Product) => {
+  const addProductLine = (p: Product): number => {
+    let resultIdx = -1;
     setItems((arr) => {
       // increment qty if same product already present
       const existingIdx = arr.findIndex((it) => it.product_id === p.id);
       if (existingIdx >= 0) {
+        resultIdx = existingIdx;
         const next = arr.map((it, i) =>
           i === existingIdx ? { ...it, qty: String((Number(it.qty) || 0) + 1) } : it,
         );
@@ -229,11 +248,13 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         sale_price: String(Number(p.sale_price) || 0),
         gst_rate: String(Number(p.gst_rate) || 0),
       };
+      resultIdx = blankIdx >= 0 ? blankIdx : arr.length;
       const next = blankIdx >= 0
         ? arr.map((it, i) => (i === blankIdx ? row : it))
         : [...arr, row];
       return ensureTrailingRow(next);
     });
+    return resultIdx;
   };
 
   const handleBarcode = (code: string) => {
@@ -241,9 +262,11 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
     if (!trimmed) return;
     const p = products.find((x) => (x.barcode || "").trim() === trimmed);
     if (p) {
-      addProductLine(p);
+      const idx = addProductLine(p);
       setBarcode("");
-      barcodeRef.current?.focus();
+      // HSN first, then Qty, then Enter loops back to the barcode box —
+      // see cellKeyDown above.
+      if (idx >= 0) focusRowCell(idx, "hsn"); else barcodeRef.current?.focus();
       return;
     }
     setQuickAdd({ barcode: trimmed });
@@ -346,6 +369,10 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         className="max-w-5xl max-h-[92vh] flex flex-col overflow-hidden"
         onKeyDown={(e) => {
           if (e.key === "End" && !save.isPending) { e.preventDefault(); save.mutate(); }
+          if ((e.ctrlKey || e.metaKey) && (e.key === "i" || e.key === "I")) {
+            e.preventDefault();
+            setPickerOpen(true);
+          }
         }}
       >
         <DialogHeader><DialogTitle>New Purchase Bill</DialogTitle></DialogHeader>
@@ -367,7 +394,12 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="mt-3 rounded-md border border-primary/40 bg-primary/5 p-3">
-          <Label className="text-xs uppercase tracking-wide flex items-center gap-1"><Scan className="h-3.5 w-3.5" /> Scan / Enter Barcode</Label>
+          <div className="flex items-center justify-between gap-2">
+            <Label className="text-xs uppercase tracking-wide flex items-center gap-1"><Scan className="h-3.5 w-3.5" /> Scan / Enter Barcode</Label>
+            <Button type="button" variant="outline" size="sm" className="h-6 text-xs px-2" onClick={() => setPickerOpen(true)}>
+              <ListIcon className="h-3 w-3 mr-1" /> All items (Ctrl+I)
+            </Button>
+          </div>
           <Input
             ref={barcodeRef}
             value={barcode}
@@ -375,7 +407,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
             onKeyDown={(e) => {
               if (e.key === "Enter") { e.preventDefault(); handleBarcode(barcode); }
             }}
-            placeholder="Scan barcode and press Enter — unknown codes open Quick Add"
+            placeholder="Scan barcode and press Enter, or press Ctrl+I to pick from all items"
             className="mt-1 font-mono"
             autoFocus
           />
@@ -418,10 +450,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
                               gst_rate: String(Number(p.gst_rate) || 0),
                             });
                             setItems((arr) => ensureTrailingRow(arr));
-                            setTimeout(() => {
-                              const el = cellRefs.current[`${idx}:qty`];
-                              el?.focus(); el?.select();
-                            }, 30);
+                            focusRowCell(idx, "hsn");
                           }
                         }}
                       >
@@ -483,7 +512,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         <DialogFooter className="sm:justify-between border-t pt-3 mt-1 shrink-0 bg-background">
 
           <div className="text-xs text-muted-foreground self-center">
-            Enter = next field · after GST% jumps back to scan · End = Save Purchase
+            Enter = next field · Barcode→HSN→Qty→back to scan · Ctrl+I = pick from all items · End = Save Purchase
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -500,12 +529,28 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
           onCreated={async (newId) => {
             const { data } = await refetchProducts();
             const p = (data ?? []).find((x) => x.id === newId);
-            if (p) addProductLine(p);
-            setQuickAdd(null);
-            barcodeRef.current?.focus();
+            if (p) {
+              const idx = addProductLine(p);
+              setQuickAdd(null);
+              if (idx >= 0) focusRowCell(idx, "hsn"); else barcodeRef.current?.focus();
+            } else {
+              setQuickAdd(null);
+              barcodeRef.current?.focus();
+            }
           }}
         />
       )}
+
+      <ProductPickerDialog
+        open={pickerOpen}
+        products={products}
+        onClose={() => { setPickerOpen(false); barcodeRef.current?.focus(); }}
+        onPick={(p) => {
+          const idx = addProductLine(p);
+          setPickerOpen(false);
+          if (idx >= 0) focusRowCell(idx, "hsn"); else barcodeRef.current?.focus();
+        }}
+      />
     </>
   );
 }
@@ -557,6 +602,81 @@ function QuickAddProductDialog({
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Add & Continue"}</Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// "All items" picker — opened via the Ctrl+I shortcut or its button next to
+// the barcode box, for adding a line without a scanner (or when a product
+// has no barcode). Arrow keys move the highlighted row, Enter picks it.
+function ProductPickerDialog({
+  open, products, onClose, onPick,
+}: { open: boolean; products: Product[]; onClose: () => void; onPick: (p: Product) => void }) {
+  const [q, setQ] = useState("");
+  const [hi, setHi] = useState(0);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return products.slice(0, 200);
+    return products.filter((p) =>
+      p.name.toLowerCase().includes(term) || (p.barcode ?? "").toLowerCase().includes(term),
+    ).slice(0, 200);
+  }, [q, products]);
+
+  useEffect(() => {
+    if (open) {
+      setQ("");
+      setHi(0);
+      setTimeout(() => searchRef.current?.focus(), 30);
+    }
+  }, [open]);
+  useEffect(() => { setHi(0); }, [q]);
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>(`[data-idx="${hi}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [hi]);
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
+        <DialogHeader><DialogTitle>All items</DialogTitle></DialogHeader>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            ref={searchRef}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search by name or barcode…"
+            className="pl-8"
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, filtered.length - 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+              else if (e.key === "Enter") { e.preventDefault(); const p = filtered[hi]; if (p) onPick(p); }
+              else if (e.key === "Escape") { e.preventDefault(); onClose(); }
+            }}
+          />
+        </div>
+        <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto border rounded-md divide-y">
+          {filtered.length === 0 && (
+            <div className="p-4 text-sm text-muted-foreground text-center">No items match "{q}"</div>
+          )}
+          {filtered.map((p, idx) => (
+            <button
+              key={p.id}
+              type="button"
+              data-idx={idx}
+              onMouseEnter={() => setHi(idx)}
+              onClick={() => onPick(p)}
+              className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-3 ${idx === hi ? "bg-accent" : ""}`}
+            >
+              <span className="truncate">{p.name}</span>
+              <span className="text-xs font-mono text-muted-foreground shrink-0">{p.barcode || "—"}</span>
+            </button>
+          ))}
+        </div>
+        <div className="text-xs text-muted-foreground">↑↓ to move · Enter to add · Esc to close</div>
       </DialogContent>
     </Dialog>
   );

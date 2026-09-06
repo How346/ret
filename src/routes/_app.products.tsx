@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { buildFixedLabelJob, printTsplDirect, type FixedLabel } from "@/lib/tspl";
 import { useStoreSettings } from "@/hooks/use-store-settings";
+import { onEnterFocusNext } from "@/lib/keyboard-nav";
 
 export const Route = createFileRoute("/_app/products")({
   component: ProductsPage,
@@ -196,17 +197,19 @@ function ProductsPage() {
           </DialogTrigger>
           <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>{editing?.id ? "Edit product" : "New product"}</DialogTitle></DialogHeader>
-            {editing && <ProductForm value={editing} onChange={setEditing} categories={categories} />}
-            {editing?.id && (
-              <>
-                <VariantsEditor productId={editing.id} />
-                <PurchaseHistory productId={editing.id} />
-              </>
-            )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-              <Button onClick={save}>Save</Button>
-            </DialogFooter>
+            <div data-enter-nav onKeyDown={onEnterFocusNext}>
+              {editing && <ProductForm value={editing} onChange={setEditing} categories={categories} />}
+              {editing?.id && (
+                <>
+                  <VariantsEditor productId={editing.id} />
+                  <PurchaseHistory productId={editing.id} />
+                </>
+              )}
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+                <Button onClick={save}>Save</Button>
+              </DialogFooter>
+            </div>
           </DialogContent>
         </Dialog>
 

@@ -145,25 +145,42 @@ async function captureHtmlToClipboardImage(html, widthPx) {
     fs.writeFileSync(tmpFile, html, "utf8");
 
     shotWin = new BrowserWindow({
+      // A window that is NEVER shown often never gets composited by
+      // Chromium, so capturePage() silently returns a blank/empty image —
+      // that's why the clipboard ended up empty. Placing it far off-screen
+      // and using showInactive() keeps it invisible to the user while still
+      // being "shown" enough to render properly.
       show: false,
+      x: -2000,
+      y: -2000,
       width: widthPx,
       height: 100,
-      webPreferences: { contextIsolation: true, sandbox: true },
+      frame: false,
+      skipTaskbar: true,
+      webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false },
     });
+    shotWin.showInactive();
 
     await shotWin.loadFile(tmpFile);
 
     // Let images/barcodes/fonts settle, then size the window to the full
     // rendered height so the capture isn't cropped.
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 250));
     const contentHeight = await shotWin.webContents.executeJavaScript(
       "Math.ceil(document.documentElement.scrollHeight)",
     );
     const height = Math.max(100, Math.min(6000, Number(contentHeight) || 600));
     shotWin.setContentSize(widthPx, height);
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 250));
 
-    const image = await shotWin.webContents.capturePage();
+    let image = await shotWin.webContents.capturePage();
+    if (image.isEmpty()) {
+      // Rare case: compositor wasn't ready yet — give it one more chance.
+      await new Promise((r) => setTimeout(r, 400));
+      image = await shotWin.webContents.capturePage();
+    }
+    if (image.isEmpty()) return false;
+
     clipboard.writeImage(image);
     return true;
   } catch {
@@ -171,7 +188,10 @@ async function captureHtmlToClipboardImage(html, widthPx) {
   } finally {
     setTimeout(() => {
       try {
-        if (shotWin && !shotWin.isDestroyed()) shotWin.destroy();
+        if (shotWin && !shotWin.isDestroyed()) {
+          shotWin.hide();
+          shotWin.destroy();
+        }
       } catch {
         /* ignore */
       }
@@ -180,7 +200,7 @@ async function captureHtmlToClipboardImage(html, widthPx) {
       } catch {
         /* ignore */
       }
-    }, 1500);
+    }, 1000);
   }
 }
 

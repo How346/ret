@@ -893,9 +893,13 @@ function WhatsAppSendDialog({
               try {
                 const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
                 if (res.success) {
-                  toast.success(res.mode === "desktop-browser"
-                    ? "WhatsApp Web opened in your browser — paste the image (Ctrl+V) and send"
-                    : "WhatsApp opened");
+                  if (res.mode === "desktop-browser" && res.imaged === false) {
+                    toast.warning("WhatsApp opened, but the bill image couldn't be copied — you can still send the text, or print/screenshot the bill separately");
+                  } else {
+                    toast.success(res.mode === "desktop-browser"
+                      ? "WhatsApp Web opened in your browser — paste the image (Ctrl+V) and send"
+                      : "WhatsApp opened");
+                  }
                 } else {
                   toast.error("Couldn't open WhatsApp — check the number and try again");
                 }
