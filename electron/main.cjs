@@ -1,4 +1,5 @@
 const { app, BrowserWindow, shell, ipcMain, clipboard } = require("electron");
+const { execFileSync, spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -120,136 +121,174 @@ ipcMain.handle("print:html", async (_event, payload) => {
 });
 
 // ---------------------------------------------------------------------------
-// WhatsApp bill sharing (via an embedded, persistently-logged-in WhatsApp Web)
+// WhatsApp bill sharing
 //
-// WhatsApp has no public desktop API to auto-attach an image, so the
-// practical, reliable approach is:
-//   1. Keep one WhatsApp Web window open in a dedicated, persistent session
-//      (its own Chromium "partition") — the cashier scans the QR code once
-//      and stays logged in across app restarts, just like the real
-//      web.whatsapp.com in a browser tab.
-//   2. Render the bill HTML off-screen and capture it as an image, then put
-//      that image on the OS clipboard.
-//   3. Navigate that same logged-in window straight to the customer's chat
-//      using WhatsApp's own "click to chat" link (web.whatsapp.com/send),
-//      with the message pre-filled.
-// The cashier then just presses Ctrl+V in the chat box and hits send — this
-// keeps a human confirming every send instead of a script silently sending
-// messages on the shop's behalf.
+// IMPORTANT: WhatsApp Web is NEVER embedded inside the Electron app.
+// The user's selected browser is launched externally, so WhatsApp uses the
+// normal browser profile/session (Chrome/Edge/Firefox/etc.) on this PC.
 // ---------------------------------------------------------------------------
 
-let waWebWindow = null;
+function findExecutable(executableNames, extraPaths = []) {
+  const candidates = [...extraPaths];
 
-function getOrCreateWhatsAppWebWindow() {
-  if (waWebWindow && !waWebWindow.isDestroyed()) return waWebWindow;
-  waWebWindow = new BrowserWindow({
-    width: 980,
-    height: 760,
-    show: false,
-    autoHideMenuBar: true,
-    title: "WhatsApp Web — Margin ERP",
-    webPreferences: {
-      // Its own persistent partition: login (cookies/localStorage) is saved
-      // to disk and survives app restarts, separate from the main app.
-      partition: "persist:whatsapp-web",
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  waWebWindow.on("closed", () => {
-    waWebWindow = null;
-  });
-  waWebWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url && /^https?:\/\//.test(url)) shell.openExternal(url);
-    return { action: "deny" };
-  });
-  return waWebWindow;
-}
-
-async function captureHtmlToClipboardImage(html, widthPx) {
-  let tmpFile = null;
-  let shotWin = null;
-  try {
-    tmpFile = path.join(os.tmpdir(), `margin-erp-wa-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
-    fs.writeFileSync(tmpFile, html, "utf8");
-
-    shotWin = new BrowserWindow({
-      show: false,
-      width: widthPx,
-      height: 100,
-      webPreferences: { contextIsolation: true, sandbox: true },
-    });
-
-    await shotWin.loadFile(tmpFile);
-
-    // Let images/barcodes/fonts settle, then size the window to the full
-    // rendered height so the capture isn't cropped.
-    await new Promise((r) => setTimeout(r, 150));
-    const contentHeight = await shotWin.webContents.executeJavaScript(
-      "Math.ceil(document.documentElement.scrollHeight)",
-    );
-    const height = Math.max(100, Math.min(6000, Number(contentHeight) || 600));
-    shotWin.setContentSize(widthPx, height);
-    await new Promise((r) => setTimeout(r, 100));
-
-    const image = await shotWin.webContents.capturePage();
-    clipboard.writeImage(image);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    setTimeout(() => {
+  if (process.platform === "win32") {
+    for (const name of executableNames) {
       try {
-        if (shotWin && !shotWin.isDestroyed()) shotWin.destroy();
+        const result = execFileSync("where.exe", [name], {
+          encoding: "utf8",
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim().split(/\r?\n/)[0];
+        if (result) candidates.push(result);
       } catch {
-        /* ignore */
+        /* not in PATH */
       }
-      try {
-        if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-      } catch {
-        /* ignore */
-      }
-    }, 1500);
-  }
-}
-
-// Opens (or brings to front) the persistent WhatsApp Web window so the user
-// can scan the QR code and log in. Safe to call repeatedly — it reuses the
-// same window/session and won't reload (and lose) an already-open chat.
-ipcMain.handle("whatsapp:open-web", async () => {
-  try {
-    const win = getOrCreateWhatsAppWebWindow();
-    const currentUrl = win.webContents.getURL();
-    if (!currentUrl || !/whatsapp\.com/.test(currentUrl)) {
-      await win.loadURL("https://web.whatsapp.com/");
     }
-    win.show();
-    win.focus();
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (candidate && fs.existsSync(candidate)) return candidate;
+    } catch {
+      /* ignore invalid paths */
+    }
+  }
+  return null;
+}
+
+function getWhatsAppBrowsers() {
+  const env = process.env;
+  const pf = env.ProgramFiles || "C:\\Program Files";
+  const pfx86 = env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const local = env.LOCALAPPDATA || path.join(env.USERPROFILE || "", "AppData", "Local");
+
+  const definitions = [
+    {
+      id: "edge",
+      name: "Microsoft Edge",
+      exe: ["msedge.exe"],
+      paths: [
+        path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
+        path.join(pfx86, "Microsoft", "Edge", "Application", "msedge.exe"),
+        path.join(local, "Microsoft", "Edge", "Application", "msedge.exe"),
+      ],
+    },
+    {
+      id: "chrome",
+      name: "Google Chrome",
+      exe: ["chrome.exe"],
+      paths: [
+        path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+        path.join(pfx86, "Google", "Chrome", "Application", "chrome.exe"),
+        path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+      ],
+    },
+    {
+      id: "brave",
+      name: "Brave",
+      exe: ["brave.exe"],
+      paths: [
+        path.join(pf, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+        path.join(pfx86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+        path.join(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+      ],
+    },
+    {
+      id: "firefox",
+      name: "Mozilla Firefox",
+      exe: ["firefox.exe"],
+      paths: [
+        path.join(pf, "Mozilla Firefox", "firefox.exe"),
+        path.join(pfx86, "Mozilla Firefox", "firefox.exe"),
+      ],
+    },
+    {
+      id: "opera",
+      name: "Opera",
+      exe: ["opera.exe", "launcher.exe"],
+      paths: [
+        path.join(local, "Programs", "Opera", "opera.exe"),
+        path.join(pf, "Opera", "launcher.exe"),
+        path.join(pfx86, "Opera", "launcher.exe"),
+      ],
+    },
+    {
+      id: "vivaldi",
+      name: "Vivaldi",
+      exe: ["vivaldi.exe"],
+      paths: [
+        path.join(local, "Vivaldi", "Application", "vivaldi.exe"),
+        path.join(pf, "Vivaldi", "Application", "vivaldi.exe"),
+        path.join(pfx86, "Vivaldi", "Application", "vivaldi.exe"),
+      ],
+    },
+  ];
+
+  return definitions
+    .map((b) => ({ id: b.id, name: b.name, path: findExecutable(b.exe, b.paths) }))
+    .filter((b) => !!b.path);
+}
+
+function openWhatsAppInBrowser(url, browserId) {
+  if (!url) throw new Error("Missing WhatsApp URL");
+
+  if (!browserId || browserId === "default") {
+    return shell.openExternal(url);
+  }
+
+  const browser = getWhatsAppBrowsers().find((b) => b.id === browserId);
+  if (!browser || !browser.path) {
+    // If the selected browser was uninstalled, gracefully fall back to the
+    // operating system's default browser instead of opening WhatsApp in Electron.
+    return shell.openExternal(url);
+  }
+
+  const child = spawn(browser.path, [url], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+  return true;
+}
+
+ipcMain.handle("whatsapp:browsers", async () => {
+  try {
+    return [
+      { id: "default", name: "System default browser" },
+      ...getWhatsAppBrowsers().map(({ id, name }) => ({ id, name })),
+    ];
+  } catch {
+    return [{ id: "default", name: "System default browser" }];
+  }
+});
+
+ipcMain.handle("whatsapp:open-web", async (_event, payload) => {
+  try {
+    const browserId = String((payload && payload.browserId) || "default");
+    openWhatsAppInBrowser("https://web.whatsapp.com/", browserId);
     return { success: true };
   } catch (err) {
     return { success: false, errorType: String((err && err.message) || err) };
   }
 });
 
-// Captures the bill as an image (copied to clipboard), then opens the same
-// logged-in WhatsApp Web window straight to the given customer's chat with
-// the message pre-filled, ready for the cashier to paste the image and send.
 ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
   const html = (payload && payload.html) || "";
   const phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");
   const message = (payload && payload.message) || "";
+  const browserId = String((payload && payload.browserId) || "default");
   const widthPx = Math.max(280, Math.min(1200, Number(payload && payload.widthPx) || 380));
 
   if (!phone) return { success: false, errorType: "missing-phone" };
 
+  // Keep the useful bill-image workflow: render the receipt and put it on
+  // the OS clipboard. The external browser can paste it into WhatsApp Web.
   const imaged = await captureHtmlToClipboardImage(html, widthPx);
 
   try {
-    const win = getOrCreateWhatsAppWebWindow();
     const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
-    await win.loadURL(chatUrl);
-    win.show();
-    win.focus();
+    openWhatsAppInBrowser(chatUrl, browserId);
     return { success: true, imaged };
   } catch (err) {
     return { success: false, errorType: String((err && err.message) || err), imaged };

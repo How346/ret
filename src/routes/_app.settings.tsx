@@ -24,7 +24,13 @@ import {
   setSilentPrint,
   type PrinterInfo,
 } from "@/lib/printer-prefs";
-import { openWhatsAppWeb } from "@/lib/whatsapp-send";
+import {
+  openWhatsAppWeb,
+  listWhatsAppBrowsers,
+  getWhatsAppBrowserPreference,
+  setWhatsAppBrowserPreference,
+  type WhatsAppBrowser,
+} from "@/lib/whatsapp-send";
 import { backupSupported, pickBackupFolder, getSavedFolder, forgetFolder, runBackup, restoreBackup } from "@/lib/local-backup";
 import { useMyLicense, licenseStatus, redeemLicenseKey } from "@/hooks/use-license";
 import { useQueryClient as useQC2 } from "@tanstack/react-query";
@@ -42,12 +48,15 @@ function Settings() {
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
   const [printerPrefs, setPrinterPrefs] = useState(getPrinterPrefs());
   const [waConnecting, setWaConnecting] = useState(false);
+  const [waBrowsers, setWaBrowsers] = useState<WhatsAppBrowser[]>([]);
+  const [waBrowser, setWaBrowser] = useState<string>(() => getWhatsAppBrowserPreference());
   const desktopPrinting = isDesktopPrintingAvailable();
 
   useEffect(() => { if (settings) setForm({ ...settings }); }, [settings]);
   useEffect(() => {
     if (!desktopPrinting) return;
     listPrinters().then(setPrinters);
+    listWhatsAppBrowsers().then(setWaBrowsers);
   }, [desktopPrinting]);
 
   if (!form) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
@@ -315,6 +324,29 @@ function Settings() {
               app the bill image is also copied to your clipboard, ready to paste (Ctrl+V) into the chat.
             </p>
             <div className="grid md:grid-cols-3 gap-4 pt-2 border-t border-border">
+              <Field label="WhatsApp Web browser">
+                <Select
+                  value={waBrowser}
+                  onValueChange={(v) => {
+                    setWaBrowser(v);
+                    setWhatsAppBrowserPreference(v);
+                    toast.success("WhatsApp browser preference saved");
+                  }}
+                  disabled={!form.whatsapp_enabled || !desktopPrinting}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select browser" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(waBrowsers.length ? waBrowsers : [{ id: "default", name: "System default browser" }]).map((b) => (
+                      <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  WhatsApp Web opens in this browser, never inside the Electron app.
+                </p>
+              </Field>
               <Field label="Default country code">
                 <Input
                   value={form.whatsapp_country_code ?? "91"}
@@ -341,8 +373,8 @@ function Settings() {
               <div className="rounded-md border border-border p-3 space-y-2 pt-3 border-t">
                 <div className="font-semibold flex items-center gap-1 text-sm"><MessageCircle className="h-3.5 w-3.5" /> WhatsApp Web login</div>
                 <p className="text-xs text-muted-foreground">
-                  Log in once by scanning the QR code — this app keeps you signed in on this computer,
-                  the same way web.whatsapp.com does in a browser tab.
+                  WhatsApp Web opens in your selected browser. Scan the QR code there if needed.
+                  Your login/session is managed by that browser, not by this app.
                 </p>
                 <Button
                   variant="outline"

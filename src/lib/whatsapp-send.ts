@@ -3,6 +3,10 @@ import { isDesktopPrintingAvailable } from "@/lib/printer-prefs";
 const DEFAULT_TEMPLATE =
   "Hi {customer}, thank you for shopping at {shop}! Your bill {invoice} of {total} is attached. Visit again!";
 
+const WHATSAPP_BROWSER_KEY = "margin-erp:whatsapp-browser";
+
+export type WhatsAppBrowser = { id: string; name: string };
+
 export function fillWhatsAppTemplate(
   template: string | null | undefined,
   vars: { customer: string; shop: string; invoice: string; total: string },
@@ -15,9 +19,6 @@ export function fillWhatsAppTemplate(
     .replace(/\{total\}/g, vars.total);
 }
 
-// Normalizes a phone number for wa.me: digits only, prefixing the shop's
-// default country code when the number looks like a local 10-digit mobile
-// number without one already.
 export function normalizeWhatsAppPhone(raw: string, countryCode: string | null | undefined): string {
   const digits = String(raw || "").replace(/[^\d]/g, "");
   if (!digits) return "";
@@ -25,15 +26,39 @@ export function normalizeWhatsAppPhone(raw: string, countryCode: string | null |
   return digits;
 }
 
-export type SendReceiptResult = { success: boolean; mode: "desktop-web" | "web-text-only"; errorType?: string };
+export function getWhatsAppBrowserPreference(): string {
+  try {
+    return localStorage.getItem(WHATSAPP_BROWSER_KEY) || "default";
+  } catch {
+    return "default";
+  }
+}
 
-// Sends the bill over WhatsApp.
-// - Desktop (Electron): captures the receipt as an image (copied to the
-//   clipboard) and navigates the app's persistent, logged-in WhatsApp Web
-//   window straight to the customer's chat with the message pre-filled —
-//   the cashier pastes (Ctrl+V) the image in and sends.
-// - Web build: no OS clipboard/screenshot access, so it just opens
-//   web.whatsapp.com with the chat and message text pre-filled.
+export function setWhatsAppBrowserPreference(browserId: string) {
+  try {
+    localStorage.setItem(WHATSAPP_BROWSER_KEY, browserId || "default");
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function listWhatsAppBrowsers(): Promise<WhatsAppBrowser[]> {
+  if (typeof window !== "undefined" && window.electronAPI?.listWhatsAppBrowsers) {
+    try {
+      return (await window.electronAPI.listWhatsAppBrowsers()) || [];
+    } catch {
+      return [{ id: "default", name: "System default browser" }];
+    }
+  }
+  return [{ id: "default", name: "System default browser" }];
+}
+
+export type SendReceiptResult = {
+  success: boolean;
+  mode: "external-browser" | "web-text-only";
+  errorType?: string;
+};
+
 export async function sendReceiptOnWhatsApp(opts: {
   html: string;
   phone: string;
@@ -41,13 +66,20 @@ export async function sendReceiptOnWhatsApp(opts: {
   paperSize?: "58mm" | "80mm" | "A4";
 }): Promise<SendReceiptResult> {
   const widthPx = opts.paperSize === "58mm" ? 260 : opts.paperSize === "A4" ? 794 : 360;
+  const browserId = getWhatsAppBrowserPreference();
 
   if (isDesktopPrintingAvailable() && window.electronAPI?.sendReceiptWhatsAppWeb) {
     try {
-      const res = await window.electronAPI.sendReceiptWhatsAppWeb(opts.html, opts.phone, opts.message, widthPx);
-      return { success: !!res?.success, mode: "desktop-web", errorType: res?.errorType };
+      const res = await window.electronAPI.sendReceiptWhatsAppWeb(
+        opts.html,
+        opts.phone,
+        opts.message,
+        widthPx,
+        browserId,
+      );
+      return { success: !!res?.success, mode: "external-browser", errorType: res?.errorType };
     } catch (err: any) {
-      return { success: false, mode: "desktop-web", errorType: String(err?.message || err) };
+      return { success: false, mode: "external-browser", errorType: String(err?.message || err) };
     }
   }
 
@@ -58,13 +90,12 @@ export async function sendReceiptOnWhatsApp(opts: {
   return { success: true, mode: "web-text-only" };
 }
 
-// Opens (or focuses) the app's persistent WhatsApp Web session so the user
-// can scan the QR code and log in once — the login is then kept for future
-// sends, on both this dialog and the Settings page.
 export async function openWhatsAppWeb(): Promise<{ success: boolean; errorType?: string }> {
+  const browserId = getWhatsAppBrowserPreference();
+
   if (isDesktopPrintingAvailable() && window.electronAPI?.openWhatsAppWeb) {
     try {
-      return await window.electronAPI.openWhatsAppWeb();
+      return await window.electronAPI.openWhatsAppWeb(browserId);
     } catch (err: any) {
       return { success: false, errorType: String(err?.message || err) };
     }
