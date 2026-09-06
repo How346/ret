@@ -1,0 +1,46 @@
+name: Build Margin ERP Offline for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build and package offline desktop app
+        run: bun run package:win
+
+      - name: Create Windows download archive
+        shell: pwsh
+        run: Compress-Archive -Path "electron-release/Margin ERP Offline-win32-x64" -DestinationPath "MarginERP-Offline-Windows.zip" -CompressionLevel Optimal
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MarginERP-Offline-Windows
+          path: MarginERP-Offline-Windows.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach archive to tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" MarginERP-Offline-Windows.zip --generate-notes

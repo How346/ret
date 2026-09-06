@@ -1,0 +1,4 @@
+project_id = "tllxvwwfvvbtdatnqhit"
+
+[functions.barcode-lookup]
+verify_jwt = false
