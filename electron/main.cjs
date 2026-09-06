@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, clipboard } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, clipboard, nativeImage } = require("electron");
 const { execFileSync, spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -302,6 +302,34 @@ ipcMain.handle("whatsapp:open-web", async (_event, payload) => {
   }
 });
 
+
+async function captureHtmlToClipboardImage(html, widthPx) {
+  if (!html) return false;
+  let win = null;
+  try {
+    win = new BrowserWindow({
+      show: false,
+      width: Math.max(280, Math.min(1200, Number(widthPx) || 380)),
+      height: 1000,
+      webPreferences: { contextIsolation: true, sandbox: true },
+    });
+    const dataUrl = "data:text/html;charset=UTF-8," + encodeURIComponent(html);
+    await win.loadURL(dataUrl);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const image = await win.webContents.capturePage();
+    if (image && !image.isEmpty()) {
+      clipboard.writeImage(nativeImage.createFromBuffer(image.toPNG()));
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error("WhatsApp receipt image capture failed:", err);
+    return false;
+  } finally {
+    try { if (win && !win.isDestroyed()) win.destroy(); } catch {}
+  }
+}
+
 ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
   const html = (payload && payload.html) || "";
   const phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");
@@ -311,20 +339,14 @@ ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
 
   if (!phone) return { success: false, errorType: "missing-phone" };
 
-  // IMPORTANT: open WhatsApp FIRST. Rendering/copying the bill must never
-  // prevent WhatsApp Web from opening. Clipboard image capture is best-effort.
-  let imaged = false;
+  // Keep the useful bill-image workflow: render the receipt and put it on
+  // the OS clipboard. The external browser can paste it into WhatsApp Web.
+  const imaged = await captureHtmlToClipboardImage(html, widthPx);
+
   try {
     const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
     const opened = await openWhatsAppInBrowser(chatUrl, browserId);
-    if (!opened) return { success: false, errorType: "browser-launch-failed", imaged };
-
-    try {
-      imaged = !!(await captureHtmlToClipboardImage(html, widthPx));
-    } catch {
-      // The browser has already opened; clipboard/image failure is non-fatal.
-    }
-    return { success: true, errorType: undefined, imaged };
+    return { success: !!opened, errorType: opened ? undefined : "browser-launch-failed", imaged };
   } catch (err) {
     return { success: false, errorType: String((err && err.message) || err), imaged };
   }

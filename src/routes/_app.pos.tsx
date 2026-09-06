@@ -556,7 +556,18 @@ function POS() {
             qc.invalidateQueries({ queryKey: ["products", "pos"] });
             setPayOpen(false);
             clearBill();
-            const customer = customers.find((c: any) => c.id === customerId) ?? null;
+            // Re-read the customer after saving. This is important when the
+            // customer was just created in the same POS session: React Query
+            // may still be showing the previous customer list for a moment.
+            let customer: any = customers.find((c: any) => c.id === customerId) ?? null;
+            if (customerId) {
+              const { data: freshCustomer } = await supabase
+                .from("customers")
+                .select("id,name,phone,gstin")
+                .eq("id", customerId)
+                .maybeSingle();
+              if (freshCustomer) customer = freshCustomer;
+            }
 
             const receiptArgs = {
               invoiceNo: invNo as unknown as string,
@@ -893,7 +904,7 @@ function WhatsAppSendDialog({
               try {
                 const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, countryCode: settings?.whatsapp_country_code, message: ask.message, paperSize });
                 if (res.success) {
-                  toast.success(res.mode === "desktop-web"
+                  toast.success(res.mode === "external-browser"
                     ? "WhatsApp Web opened — paste the image (Ctrl+V) and send"
                     : "WhatsApp opened");
                 } else {
