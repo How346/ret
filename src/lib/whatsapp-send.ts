@@ -62,17 +62,21 @@ export type SendReceiptResult = {
 export async function sendReceiptOnWhatsApp(opts: {
   html: string;
   phone: string;
+  countryCode?: string | null;
   message: string;
   paperSize?: "58mm" | "80mm" | "A4";
 }): Promise<SendReceiptResult> {
   const widthPx = opts.paperSize === "58mm" ? 260 : opts.paperSize === "A4" ? 794 : 360;
   const browserId = getWhatsAppBrowserPreference();
+  const phone = normalizeWhatsAppPhone(opts.phone, opts.countryCode);
+
+  if (!phone) return { success: false, mode: "external-browser", errorType: "missing-phone" };
 
   if (isDesktopPrintingAvailable() && window.electronAPI?.sendReceiptWhatsAppWeb) {
     try {
       const res = await window.electronAPI.sendReceiptWhatsAppWeb(
         opts.html,
-        opts.phone,
+        phone,
         opts.message,
         widthPx,
         browserId,
@@ -83,9 +87,7 @@ export async function sendReceiptOnWhatsApp(opts: {
     }
   }
 
-  const digits = opts.phone.replace(/[^\d]/g, "");
-  if (!digits) return { success: false, mode: "web-text-only", errorType: "missing-phone" };
-  const url = `https://web.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(opts.message)}`;
+  const url = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(opts.message)}`;
   window.open(url, "_blank");
   return { success: true, mode: "web-text-only" };
 }

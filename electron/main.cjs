@@ -229,27 +229,56 @@ function getWhatsAppBrowsers() {
     .filter((b) => !!b.path);
 }
 
-function openWhatsAppInBrowser(url, browserId) {
+async function openWhatsAppInBrowser(url, browserId) {
   if (!url) throw new Error("Missing WhatsApp URL");
 
-  if (!browserId || browserId === "default") {
-    return shell.openExternal(url);
+  const id = String(browserId || "default");
+
+  // The OS default browser is the safest and most reliable way to launch an
+  // external browser from a packaged Electron app. shell.openExternal does
+  // not create an Electron window.
+  if (id === "default") {
+    const result = await shell.openExternal(url);
+    return result === undefined ? true : !!result;
   }
 
-  const browser = getWhatsAppBrowsers().find((b) => b.id === browserId);
+  const browser = getWhatsAppBrowsers().find((b) => b.id === id);
   if (!browser || !browser.path) {
-    // If the selected browser was uninstalled, gracefully fall back to the
-    // operating system's default browser instead of opening WhatsApp in Electron.
-    return shell.openExternal(url);
+    // Selected browser is no longer installed. Fall back to the OS browser.
+    const result = await shell.openExternal(url);
+    return result === undefined ? true : !!result;
   }
 
-  const child = spawn(browser.path, [url], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  child.unref();
-  return true;
+  // Launch the real installed browser process. Do not use BrowserWindow or
+  // loadURL here: WhatsApp must stay completely outside Electron.
+  try {
+    const child = spawn(browser.path, ["--new-window", url], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      shell: false,
+    });
+
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const done = (value, error) => {
+        if (settled) return;
+        settled = true;
+        error ? reject(error) : resolve(value);
+      };
+
+      child.once("error", (err) => done(false, err));
+      // A successfully spawned process is enough. Some browsers keep the
+      // process alive for the whole user session, so do not wait for exit.
+      setTimeout(() => done(true), 150);
+      child.unref();
+    });
+  } catch (err) {
+    // Last-resort fallback to the system browser.
+    const result = await shell.openExternal(url);
+    if (result === undefined || result) return true;
+    throw err;
+  }
 }
 
 ipcMain.handle("whatsapp:browsers", async () => {
@@ -266,8 +295,8 @@ ipcMain.handle("whatsapp:browsers", async () => {
 ipcMain.handle("whatsapp:open-web", async (_event, payload) => {
   try {
     const browserId = String((payload && payload.browserId) || "default");
-    openWhatsAppInBrowser("https://web.whatsapp.com/", browserId);
-    return { success: true };
+    const opened = await openWhatsAppInBrowser("https://web.whatsapp.com/", browserId);
+    return { success: !!opened, errorType: opened ? undefined : "browser-launch-failed" };
   } catch (err) {
     return { success: false, errorType: String((err && err.message) || err) };
   }
@@ -288,8 +317,8 @@ ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
 
   try {
     const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
-    openWhatsAppInBrowser(chatUrl, browserId);
-    return { success: true, imaged };
+    const opened = await openWhatsAppInBrowser(chatUrl, browserId);
+    return { success: !!opened, errorType: opened ? undefined : "browser-launch-failed", imaged };
   } catch (err) {
     return { success: false, errorType: String((err && err.message) || err), imaged };
   }

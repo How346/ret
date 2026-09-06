@@ -891,13 +891,13 @@ function WhatsAppSendDialog({
               if (!ask) return;
               setSending(true);
               try {
-                const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
+                const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, countryCode: settings?.whatsapp_country_code, message: ask.message, paperSize });
                 if (res.success) {
                   toast.success(res.mode === "desktop-web"
                     ? "WhatsApp Web opened — paste the image (Ctrl+V) and send"
                     : "WhatsApp opened");
                 } else {
-                  toast.error("Couldn't open WhatsApp — check the number and try again");
+                  toast.error(res.errorType === "missing-phone" ? "Please enter a valid WhatsApp number" : `Couldn't open WhatsApp (${res.errorType || "browser error"})`);
                 }
               } finally {
                 setSending(false);
