@@ -151,9 +151,11 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => { barcodeRef.current?.focus(); }, []);
 
-  // ---- Marg-style keyboard flow: Enter walks the row, End saves ----
+  // Fast purchase-entry keyboard flow:
+  // F2 = barcode scanner, Enter = next field / add scanned item,
+  // Ctrl+Enter or End = save purchase, Escape = close dialog.
   const cellRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const COLS = ["barcode", "hsn", "qty", "cost", "mrp", "sale", "gst"] as const;
+  const COLS = ["qty", "cost", "mrp", "sale", "gst"] as const;
   const setCell = (idx: number, col: string) => (el: HTMLInputElement | null) => {
     cellRefs.current[`${idx}:${col}`] = el;
   };
@@ -167,7 +169,6 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
       el?.focus(); el?.select();
       return;
     }
-    // End of the row → make sure a blank row exists and jump back to scanning
     setItems((arr) => ensureTrailingRow(arr));
     setTimeout(() => { barcodeRef.current?.focus(); barcodeRef.current?.select(); }, 30);
   };
@@ -345,7 +346,15 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
       <DialogContent
         className="max-w-5xl max-h-[92vh] flex flex-col overflow-hidden"
         onKeyDown={(e) => {
-          if (e.key === "End" && !save.isPending) { e.preventDefault(); save.mutate(); }
+          if ((e.key === "F2" || e.key === "F4") && !quickAdd) {
+            e.preventDefault();
+            barcodeRef.current?.focus();
+            barcodeRef.current?.select();
+          }
+          if ((e.key === "End" || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) && !save.isPending) {
+            e.preventDefault();
+            save.mutate();
+          }
         }}
       >
         <DialogHeader><DialogTitle>New Purchase Bill</DialogTitle></DialogHeader>
@@ -385,7 +394,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[24%]">Product</TableHead>
+                <TableHead className="w-[24%]">Product (from scan)</TableHead>
                 <TableHead>Barcode</TableHead>
                 <TableHead>HSN</TableHead>
                 <TableHead className="w-16">Qty</TableHead>
@@ -404,34 +413,13 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
                 return (
                   <TableRow key={idx}>
                     <TableCell>
-                      <Select
-                        value={i.product_id ?? ""}
-                        onValueChange={(v) => {
-                          const p = products.find((x) => x.id === v);
-                          if (p) {
-                            upd(idx, {
-                              product_id: p.id, product_name: p.name, barcode: p.barcode ?? "",
-                              hsn_code: p.hsn_code ?? "",
-                              cost: String(Number(p.purchase_price) || 0),
-                              mrp: String(Number(p.mrp) || 0),
-                              sale_price: String(Number(p.sale_price) || 0),
-                              gst_rate: String(Number(p.gst_rate) || 0),
-                            });
-                            setItems((arr) => ensureTrailingRow(arr));
-                            setTimeout(() => {
-                              const el = cellRefs.current[`${idx}:qty`];
-                              el?.focus(); el?.select();
-                            }, 30);
-                          }
-                        }}
-                      >
-                        <SelectTrigger><SelectValue placeholder={i.product_name || "Pick product"} /></SelectTrigger>
-                        <SelectContent>
-                          {products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
+                      <div className="min-w-[180px] font-medium">
+                        {i.product_name || <span className="text-muted-foreground">Scan barcode…</span>}
+                      </div>
                     </TableCell>
-                    <TableCell><Input ref={setCell(idx, "barcode")} onKeyDown={cellKeyDown(idx, "barcode")} className="font-mono text-xs" value={i.barcode} onChange={(e) => upd(idx, { barcode: e.target.value })} /></TableCell>
+                    <TableCell>
+                      <div className="font-mono text-xs text-muted-foreground">{i.barcode || "—"}</div>
+                    </TableCell>
                     <TableCell><Input ref={setCell(idx, "hsn")} onKeyDown={cellKeyDown(idx, "hsn")} value={i.hsn_code} onChange={(e) => upd(idx, { hsn_code: e.target.value })} /></TableCell>
                     <TableCell><Input ref={setCell(idx, "qty")} onKeyDown={cellKeyDown(idx, "qty")} inputMode="decimal" value={i.qty} onChange={(e) => upd(idx, { qty: e.target.value })} /></TableCell>
                     <TableCell><Input ref={setCell(idx, "cost")} onKeyDown={cellKeyDown(idx, "cost")} inputMode="decimal" value={i.cost} onChange={(e) => upd(idx, { cost: e.target.value })} /></TableCell>
@@ -483,7 +471,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         <DialogFooter className="sm:justify-between border-t pt-3 mt-1 shrink-0 bg-background">
 
           <div className="text-xs text-muted-foreground self-center">
-            Enter = next field · after GST% jumps back to scan · End = Save Purchase
+            F2 = Scan barcode · Enter = next field · Ctrl+Enter / End = Save Purchase
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>Cancel</Button>

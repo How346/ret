@@ -311,14 +311,20 @@ ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
 
   if (!phone) return { success: false, errorType: "missing-phone" };
 
-  // Keep the useful bill-image workflow: render the receipt and put it on
-  // the OS clipboard. The external browser can paste it into WhatsApp Web.
-  const imaged = await captureHtmlToClipboardImage(html, widthPx);
-
+  // IMPORTANT: open WhatsApp FIRST. Rendering/copying the bill must never
+  // prevent WhatsApp Web from opening. Clipboard image capture is best-effort.
+  let imaged = false;
   try {
     const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
     const opened = await openWhatsAppInBrowser(chatUrl, browserId);
-    return { success: !!opened, errorType: opened ? undefined : "browser-launch-failed", imaged };
+    if (!opened) return { success: false, errorType: "browser-launch-failed", imaged };
+
+    try {
+      imaged = !!(await captureHtmlToClipboardImage(html, widthPx));
+    } catch {
+      // The browser has already opened; clipboard/image failure is non-fatal.
+    }
+    return { success: true, errorType: undefined, imaged };
   } catch (err) {
     return { success: false, errorType: String((err && err.message) || err), imaged };
   }
