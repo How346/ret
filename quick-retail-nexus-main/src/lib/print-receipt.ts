@@ -3,6 +3,8 @@
 // S | Description | Qty | MRP | RATE | Amt, Bnf savings + MRP total summary,
 // Item Qty + Round off + G.TOTAL block, amount-in-words and footer.
 
+import { dispatchPrintHtml } from "@/lib/print-dispatch";
+
 export type PrintSettings = {
   shop_name: string;
   address?: string | null;
@@ -63,7 +65,7 @@ const DEFAULTS: PrintSettings = {
   auto_print: true,
 };
 
-export async function printReceipt(opts: {
+export function printReceipt(opts: {
   invoiceNo: string;
   date?: Date;
   customer?: { name?: string; phone?: string | null; gstin?: string | null } | null;
@@ -254,21 +256,7 @@ export async function printReceipt(opts: {
   </div>`).join("")}
   </body></html>`;
 
-  const electronPrint = (window as any).electronPrint;
-  if (electronPrint?.printHtml) {
-    await electronPrint.printHtml(html, {
-      paperWidthMm: widthMm,
-      paperHeightMm: s.paper_size === "A4" ? 297 : 297,
-    });
-    return;
-  }
-
-  const w = window.open("", "_blank", `width=${s.paper_size === "A4" ? 800 : 380},height=720`);
-  if (!w) return;
-  w.document.write(html);
-  w.document.close();
-  w.focus();
-  setTimeout(() => { try { w.print(); } catch { /* ignore */ } }, 350);
+  dispatchPrintHtml(html, { kind: "receipt", windowWidth: s.paper_size === "A4" ? 800 : 380, windowHeight: 720 });
 }
 
 function escapeHtml(s: string) {

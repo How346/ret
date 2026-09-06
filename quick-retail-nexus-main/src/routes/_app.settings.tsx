@@ -15,6 +15,15 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { Printer, Store, Upload, User, Building2, HardDrive, FolderOpen, DownloadCloud, RotateCcw, KeyRound } from "lucide-react";
 import { printReceipt } from "@/lib/print-receipt";
+import {
+  isDesktopPrintingAvailable,
+  listPrinters,
+  getPrinterPrefs,
+  setReceiptPrinter,
+  setLabelPrinter,
+  setSilentPrint,
+  type PrinterInfo,
+} from "@/lib/printer-prefs";
 import { backupSupported, pickBackupFolder, getSavedFolder, forgetFolder, runBackup, restoreBackup } from "@/lib/local-backup";
 import { useMyLicense, licenseStatus, redeemLicenseKey } from "@/hooks/use-license";
 import { useQueryClient as useQC2 } from "@tanstack/react-query";
@@ -29,8 +38,15 @@ function Settings() {
   const { data: settings } = useStoreSettings();
   const [form, setForm] = useState<any>(null);
   const [saving, setSaving] = useState(false);
+  const [printers, setPrinters] = useState<PrinterInfo[]>([]);
+  const [printerPrefs, setPrinterPrefs] = useState(getPrinterPrefs());
+  const desktopPrinting = isDesktopPrintingAvailable();
 
   useEffect(() => { if (settings) setForm({ ...settings }); }, [settings]);
+  useEffect(() => {
+    if (!desktopPrinting) return;
+    listPrinters().then(setPrinters);
+  }, [desktopPrinting]);
 
   if (!form) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
 
@@ -199,6 +215,68 @@ function Settings() {
                 When "Show GST breakdown" is off the bill prints "ALL ITEMS RATES GST INCLUSIVE" instead.
               </p>
             </div>
+
+            {desktopPrinting && (
+              <div className="rounded-md border border-border p-3 space-y-3">
+                <div className="font-semibold flex items-center gap-1 text-sm"><Printer className="h-3.5 w-3.5" /> This computer's printers</div>
+                <p className="text-xs text-muted-foreground">
+                  These printer choices are saved on this PC only — set them separately on every till/computer.
+                </p>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <Field label="Invoice / receipt printer">
+                    <Select
+                      value={printerPrefs.receiptPrinter ?? "__ask__"}
+                      onValueChange={(v) => {
+                        const val = v === "__ask__" ? null : v;
+                        setReceiptPrinter(val);
+                        setPrinterPrefs((p) => ({ ...p, receiptPrinter: val }));
+                      }}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__ask__">Ask each time (show print dialog)</SelectItem>
+                        {printers.map((p) => (
+                          <SelectItem key={p.name} value={p.name}>
+                            {p.displayName}{p.isDefault ? " (default)" : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Barcode label printer">
+                    <Select
+                      value={printerPrefs.labelPrinter ?? "__ask__"}
+                      onValueChange={(v) => {
+                        const val = v === "__ask__" ? null : v;
+                        setLabelPrinter(val);
+                        setPrinterPrefs((p) => ({ ...p, labelPrinter: val }));
+                      }}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__ask__">Ask each time (show print dialog)</SelectItem>
+                        {printers.map((p) => (
+                          <SelectItem key={p.name} value={p.name}>
+                            {p.displayName}{p.isDefault ? " (default)" : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
+                <Toggle
+                  label="Print silently — skip the dialog and print straight to the selected printer"
+                  checked={printerPrefs.silent}
+                  onChange={(v) => { setSilentPrint(v); setPrinterPrefs((p) => ({ ...p, silent: v })); }}
+                />
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => listPrinters().then(setPrinters)}>Refresh printer list</Button>
+                  {printers.length === 0 && (
+                    <span className="text-xs text-muted-foreground">No printers detected — check Windows has a printer installed.</span>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="rounded-md border border-border bg-muted/30 p-3 text-xs space-y-1.5">
               <div className="font-semibold flex items-center gap-1"><Printer className="h-3.5 w-3.5" /> Epson / ESC-POS printer tips</div>
               <ul className="list-disc pl-5 space-y-1 text-muted-foreground">

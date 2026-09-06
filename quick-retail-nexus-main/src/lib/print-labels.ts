@@ -4,6 +4,7 @@
 // does NOT grow the label.
 
 import JsBarcode from "jsbarcode";
+import { dispatchPrintHtml } from "@/lib/print-dispatch";
 
 export type LabelItem = {
   name: string;
@@ -55,7 +56,7 @@ function esc(s: unknown): string {
   );
 }
 
-export async function printLabels(items: LabelItem[], size: LabelSize = DEFAULT_SIZE) {
+export function printLabels(items: LabelItem[], size: LabelSize = DEFAULT_SIZE) {
   const widthMm = size.widthMm || 40;
   const heightMm = size.heightMm || 25;
   const gapMm = size.gapMm ?? 2;
@@ -193,21 +194,7 @@ export async function printLabels(items: LabelItem[], size: LabelSize = DEFAULT_
       }
     </style></head>
     <body><div class="sheet">${cells}</div>
-    <script>setTimeout(()=>{try{window.print()}catch(_){} }, 300);</script>
     </body></html>`;
 
-  const electronPrint = (window as any).electronPrint;
-  if (electronPrint?.printHtml) {
-    await electronPrint.printHtml(html, {
-      paperWidthMm: pageWidth,
-      paperHeightMm: heightMm * rowsPerPage + gapMm * Math.max(0, rowsPerPage - 1),
-    });
-    return;
-  }
-
-  const w = window.open("", "_blank", "width=520,height=640");
-  if (!w) return;
-  w.document.write(html);
-  w.document.close();
-  w.focus();
+  dispatchPrintHtml(html, { kind: "label", windowWidth: 520, windowHeight: 640 });
 }

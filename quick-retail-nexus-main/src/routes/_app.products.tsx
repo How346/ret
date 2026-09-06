@@ -16,7 +16,7 @@ import { Plus, Pencil, Search, AlertTriangle, Sparkles, Upload, Download, Tags, 
 import { inr, num } from "@/lib/format";
 import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { printLabels } from "@/lib/print-labels";
+import { buildFixedLabelJob, printTsplDirect, type FixedLabel } from "@/lib/tspl";
 import { useStoreSettings } from "@/hooks/use-store-settings";
 
 export const Route = createFileRoute("/_app/products")({
@@ -582,24 +582,30 @@ function LabelDialog({ open, onClose, items, shopName }: {
 
   const totalLabels = useMemo(() => items.reduce((a, p) => a + (copies[p.id] ?? 1), 0), [items, copies]);
 
+  const buildJob = () => {
+    const expanded: FixedLabel[] = [];
+    for (const p of items) {
+      const n = Math.max(1, Math.floor(copies[p.id] ?? 1));
+      for (let i = 0; i < n; i++) {
+        expanded.push({
+          shop: shopName || "MART",
+          name: p.name,
+          code: p.barcode || p.sku || p.id.slice(0, 12),
+          mrp: p.mrp ? Number(p.mrp).toFixed(2) : "",
+          price: p.sale_price ? Number(p.sale_price).toFixed(2) : "",
+        });
+      }
+    }
+    return buildFixedLabelJob(expanded);
+  };
+
   const doPrint = async () => {
-    if (!items.length) return;
+    const tspl = buildJob();
+    if (!tspl) return;
     setBusy(true);
     try {
-      const expanded = items.flatMap((p) => {
-        const n = Math.max(1, Math.floor(copies[p.id] ?? 1));
-        return Array.from({ length: n }, () => ({
-          name: p.name,
-          price: Number(p.sale_price) || 0,
-          barcode: p.barcode || p.sku || p.id.slice(0, 12),
-          sku: p.sku,
-          mrp: Number(p.mrp) || null,
-          shop: shopName || "MART",
-          weight: null,
-        }));
-      });
-      await printLabels(expanded, { widthMm: 40, heightMm: 25, gapMm: 2, columns: 1, rowsPerPage: 1, fillFromBottom: true });
-      toast.success("Print dialog opened — select your label printer");
+      const mode = await printTsplDirect(tspl, "labels");
+      toast.success(mode === "usb" ? "Sent to printer" : "Printer not paired — file downloaded");
     } catch (e: any) {
       toast.error(e?.message || "Print failed");
     } finally { setBusy(false); }
@@ -611,7 +617,7 @@ function LabelDialog({ open, onClose, items, shopName }: {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Tags className="h-5 w-5" /> Print Barcode Labels — TSC TTP-244 Pro</DialogTitle>
           <p className="text-xs text-muted-foreground">
-            Windows desktop uses the native print dialog. Select your installed label printer and its matching 40 × 25 mm stock.
+            Fixed 2-up layout on 76 × 25 mm roll (25 × 38 mm each). First click asks you to pick the USB printer once, then prints directly.
           </p>
         </DialogHeader>
         <div className="border rounded max-h-72 overflow-auto">

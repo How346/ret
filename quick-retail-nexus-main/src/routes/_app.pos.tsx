@@ -221,40 +221,6 @@ function POS() {
     };
   }, [cart, billDiscount]);
 
-  const printCurrentBill = async () => {
-    if (!cart.length) return;
-    const customer = customers.find((c: any) => c.id === customerId) ?? null;
-    try {
-      await printReceipt({
-        invoiceNo: "DRAFT",
-        customer: customer as any,
-        cart: cart.map(it => {
-          const prod = products.find(p => p.id === it.product_id.split(":")[0]);
-          return {
-            name: it.name,
-            hsn_code: it.hsn_code,
-            qty: it.qty,
-            price: it.price,
-            mrp: it.mrp ?? prod?.mrp ?? it.price,
-            discount: it.discount,
-            gst_rate: it.gst_rate,
-          };
-        }),
-        totals: {
-          subtotal: totals.subtotal,
-          cgst: totals.cgst,
-          sgst: totals.sgst,
-          discount: billDiscount,
-          total: totals.total,
-        },
-        payment: { cash: 0, card: 0, upi: 0 },
-        settings,
-      });
-    } catch (e: any) {
-      toast.error(e?.message || "Print failed");
-    }
-  };
-
   const updateQty = (id: string, delta: number) => {
     setCart(prev => prev.flatMap(it => {
       if (it.product_id !== id) return [it];
@@ -298,7 +264,7 @@ function POS() {
       else if (e.key === "F4") { e.preventDefault(); if (cart.length) setPayOpen(true); }
       else if (e.key === "F5") { e.preventDefault(); holdBill(); }
       else if (e.key === "F6") { e.preventDefault(); const el = document.getElementById("recall-btn"); (el as HTMLElement)?.click(); }
-      else if (e.key === "F8") { e.preventDefault(); void printCurrentBill(); }
+      else if (e.key === "F8") { e.preventDefault(); window.print(); }
       else if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); if (cart.length) setPayOpen(true); }
       else if (e.key === "Escape" && !payOpen && !inField) { e.preventDefault(); clearBill(); }
       else if (e.key === "Escape" && payOpen) setPayOpen(false);
@@ -466,7 +432,7 @@ function POS() {
           </Button>
           <span className="whitespace-nowrap"><span className="kbd">F2</span> search · <span className="kbd">End</span>/<span className="kbd">F3</span> discount · <span className="kbd">Enter</span> pay · <span className="kbd">F5</span> hold · <span className="kbd">F6</span> recall · <span className="kbd">F8</span> print · type <b>3*</b> then scan for qty 3</span>
           <div className="flex-1" />
-          <Button variant="outline" size="sm" disabled={!cart.length} onClick={() => void printCurrentBill()}>
+          <Button variant="outline" size="sm" disabled={!cart.length} onClick={() => window.print()}>
             <Printer className="h-3.5 w-3.5 mr-1" /> Print
           </Button>
         </div>
