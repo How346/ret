@@ -379,6 +379,7 @@ const functions = {
 };
 
 export const supabase: any = {
+  __offline: true,
   from: (t: string) => new QueryBuilder(t),
   auth,
   rpc,
@@ -387,5 +388,6 @@ export const supabase: any = {
   channel: () => ({ on: () => ({ subscribe: () => ({}) }), subscribe: () => ({}) }),
   removeChannel: () => {},
 };
+
 
 export default supabase;

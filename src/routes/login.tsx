@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,27 +17,17 @@ function LoginPage() {
   const nav = useNavigate();
   const { session } = useAuth();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
-  const emailRef = useRef<HTMLInputElement>(null);
-  const pwRef = useRef<HTMLInputElement>(null);
-  const nameRef = useRef<HTMLInputElement>(null);
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (session) void nav({ to: "/pos", replace: true });
-  }, [session, nav]);
+  useEffect(() => { if (session) nav({ to: "/pos" }); }, [session, nav]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busy) return;
     setBusy(true);
     try {
-      const email = emailRef.current?.value.trim() ?? "";
-      const pw = pwRef.current?.value ?? "";
-      const name = nameRef.current?.value.trim() ?? "";
-      if (!email || !pw) {
-        toast.error("Enter your email and password");
-        return;
-      }
       if (mode === "signin") {
         const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
         if (error) throw error;
@@ -53,7 +43,6 @@ function LoginPage() {
         if (error) throw error;
         toast.success("Account created. You can sign in now.");
         setMode("signin");
-        if (pwRef.current) pwRef.current.value = "";
       }
     } catch (err: any) {
       toast.error(err.message ?? "Authentication failed");
@@ -103,16 +92,17 @@ function LoginPage() {
             {mode === "signup" && (
               <div className="space-y-1.5">
                 <Label htmlFor="name">Full name</Label>
-                <Input id="name" ref={nameRef} autoComplete="name" placeholder="Your name" />
+                <Input id="name" value={name} onChange={e => setName(e.target.value)} placeholder="Your name" />
               </div>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" ref={emailRef} autoFocus type="email" required autoComplete="username" placeholder="you@store.com" />
+              <Label htmlFor="email">Email or user ID</Label>
+              <Input id="email" type="text" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)} placeholder="you@store.com" />
             </div>
+
             <div className="space-y-1.5">
               <Label htmlFor="pw">Password</Label>
-              <Input id="pw" ref={pwRef} type="password" required minLength={6} autoComplete="current-password" placeholder="••••••••" />
+              <Input id="pw" type="password" required minLength={6} value={pw} onChange={e => setPw(e.target.value)} placeholder="••••••••" />
             </div>
             <Button type="submit" className="w-full" disabled={busy}>
               {busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}

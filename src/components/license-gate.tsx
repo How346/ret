@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useMyLicense, licenseStatus, redeemLicenseKey } from "@/hooks/use-license";
 import { useQueryClient } from "@tanstack/react-query";
 import { ShieldAlert, LogOut } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 export function LicenseGate({ children }: { children: React.ReactNode }) {
   const { user, role, signOut } = useAuth();
@@ -16,10 +17,13 @@ export function LicenseGate({ children }: { children: React.ReactNode }) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Offline desktop build runs without licensing
+  if ((supabase as any).__offline) return <>{children}</>;
   // Admins bypass the gate entirely (so they can generate keys)
   if (role === "admin") return <>{children}</>;
   if (isLoading) return <>{children}</>;
   if (status.valid) return <>{children}</>;
+
 
   const reason =
     status.reason === "expired" ? "Your license has expired." :

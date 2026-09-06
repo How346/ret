@@ -115,14 +115,18 @@ export function persist() {
   saveTimer = setTimeout(async () => {
     try {
       const conn = await idb();
-      // structuredClone is substantially faster and avoids the repeated
-      // JSON stringify/parse CPU spike that can freeze Electron during UI work.
-      const snapshot = structuredClone(db);
+      const snapshot = JSON.parse(JSON.stringify(db));
       conn.transaction(STORE, "readwrite").objectStore(STORE).put(snapshot, KEY);
     } catch (e) {
       console.error("[offline-db] persist failed", e);
     }
   }, 250);
+}
+
+export async function hashPassword(pw: string): Promise<string> {
+  const bytes = new TextEncoder().encode("margin-erp::" + pw);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function seed() {
@@ -131,6 +135,21 @@ function seed() {
     table("store_settings").push(withDefaults("store_settings", {}));
   }
   if (db.meta.invoice_seq == null) db.meta.invoice_seq = 0;
+}
+
+// Built-in owner account for the desktop build: ID "admin", password "admin".
+async function seedAdmin() {
+  if (db.users.some((u) => u.email === "admin")) return;
+  const id = uuid();
+  db.users.push({
+    id,
+    email: "admin",
+    password: await hashPassword("admin"),
+    full_name: "Administrator",
+    created_at: new Date().toISOString(),
+  });
+  table("profiles").push(withDefaults("profiles", { id, full_name: "Administrator" }));
+  table("user_roles").push(withDefaults("user_roles", { user_id: id, role: "admin" }));
 }
 
 let readyPromise: Promise<void> | null = null;
@@ -145,11 +164,13 @@ export function ready(): Promise<void> {
         db.users = saved.users ?? [];
       }
       seed();
+      await seedAdmin();
       persist();
     })();
   }
   return readyPromise;
 }
+
 
 // ---------- whole-database export / import (for local file backups) ----------
 export function exportDatabase(): string {

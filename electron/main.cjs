@@ -1,90 +1,35 @@
-const { app, BrowserWindow, shell, dialog } = require("electron");
+const { app, BrowserWindow, shell, ipcMain } = require("electron");
 const path = require("node:path");
-
-// ERP screens do not need GPU acceleration. Disabling it avoids a common
-// Electron/Windows GPU-driver freeze while keeping the app fully local.
-app.disableHardwareAcceleration();
+const fs = require("node:fs");
+const os = require("node:os");
 
 let mainWindow = null;
 
-function getIndexPath() {
-  // app.getAppPath() is reliable in both development and packaged builds.
-  return path.join(app.getAppPath(), "dist-electron", "index.html");
-}
-
-async function showLoadError(win, details) {
-  console.error("[electron] renderer load error:", details);
-  if (!win || win.isDestroyed()) return;
-  try {
-    await dialog.showMessageBox(win, {
-      type: "error",
-      title: "Margin ERP could not start",
-      message: "The desktop interface failed to load.",
-      detail: `${details}\n\nTry starting the application again.`,
-    });
-  } catch {}
-}
-
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 1024,
-    minHeight: 650,
-    show: true,
+    show: false,
     autoHideMenuBar: true,
     title: "Margin ERP — Offline",
-    backgroundColor: "#ffffff",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      preload: path.join(__dirname, "preload.cjs"),
     },
   });
 
-  mainWindow.setMenuBarVisibility(false);
-
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    // External links are intentionally handed to the system browser.
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+  mainWindow = win;
+  win.once("ready-to-show", () => win.maximize());
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url && /^https?:\/\//.test(url)) shell.openExternal(url);
     return { action: "deny" };
   });
 
-  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-    if (level >= 2) console.error(`[renderer] ${message} (${sourceId}:${line})`);
-  });
-
-  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
-    void showLoadError(
-      mainWindow,
-      `Error ${errorCode}: ${errorDescription}\n${validatedURL}`,
-    );
-  });
-
-  mainWindow.webContents.on("render-process-gone", (_event, details) => {
-    console.error("[electron] renderer process exited:", details);
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    void showLoadError(mainWindow, `Renderer process stopped: ${details.reason}`);
-  });
-
-  mainWindow.on("unresponsive", () => {
-    console.error("[electron] renderer became unresponsive");
-    // Never reload automatically while the user is interacting with the app.
-    // A reload can destroy the focused input and makes keyboard stalls harder
-    // to diagnose. Keep the renderer alive and log the event instead.
-  });
-
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-  });
-
-  const indexPath = getIndexPath();
-  console.log("[electron] loading:", indexPath);
-  mainWindow.loadFile(indexPath).catch((error) => {
-    void showLoadError(mainWindow, error?.stack ?? String(error));
-  });
-
-  return mainWindow;
+  win.loadFile(path.join(__dirname, "..", "dist-electron", "index.html"));
 }
 
 app.whenReady().then(() => {
@@ -96,4 +41,80 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+// ---------------------------------------------------------------------------
+// Printing (invoices / receipts / barcode labels)
+//
+// The renderer used to call window.open() + window.print(), which the app's
+// own setWindowOpenHandler above blocks (every popup is denied), so nothing
+// ever happened when "Print" was clicked in the packaged desktop app. These
+// IPC handlers do real, native printing instead: they list the printers
+// installed on this PC and send a print job — with an OS printer-selection
+// dialog by default — to whichever one the user picks.
+// ---------------------------------------------------------------------------
+
+ipcMain.handle("printers:list", async () => {
+  const win = mainWindow || BrowserWindow.getAllWindows()[0];
+  if (!win) return [];
+  try {
+    const printers = await win.webContents.getPrintersAsync();
+    return printers.map((p) => ({
+      name: p.name,
+      displayName: p.displayName || p.name,
+      isDefault: !!p.isDefault,
+      status: p.status,
+    }));
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle("print:html", async (_event, payload) => {
+  const html = (payload && payload.html) || "";
+  const opts = (payload && payload.options) || {};
+
+  let tmpFile = null;
+  let printWin = null;
+  try {
+    tmpFile = path.join(os.tmpdir(), `margin-erp-print-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
+    fs.writeFileSync(tmpFile, html, "utf8");
+
+    printWin = new BrowserWindow({
+      show: false,
+      webPreferences: { contextIsolation: true, sandbox: true },
+    });
+
+    await printWin.loadFile(tmpFile);
+
+    const printOptions = {
+      silent: !!opts.silent,
+      printBackground: true,
+      copies: Math.max(1, Number(opts.copies) || 1),
+      margins: { marginType: "none" },
+    };
+    if (opts.deviceName) printOptions.deviceName = opts.deviceName;
+
+    const result = await new Promise((resolve) => {
+      printWin.webContents.print(printOptions, (success, errorType) => {
+        resolve({ success, errorType: success ? undefined : errorType });
+      });
+    });
+    return result;
+  } catch (err) {
+    return { success: false, errorType: String((err && err.message) || err) };
+  } finally {
+    setTimeout(() => {
+      try {
+        if (printWin && !printWin.isDestroyed()) printWin.destroy();
+      } catch {
+        /* ignore */
+      }
+      try {
+        if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+      } catch {
+        /* ignore */
+      }
+    }, 1500);
+  }
 });

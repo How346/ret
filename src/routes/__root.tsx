@@ -7,6 +7,10 @@ import appCss from "../styles.css?url";
 import { AuthProvider } from "@/hooks/use-auth";
 import { Toaster } from "@/components/ui/sonner";
 
+const IS_DESKTOP = import.meta.env.VITE_DESKTOP === "true";
+
+
+
 function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -46,11 +50,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),
-  shellComponent: RootShell,
+  shellComponent: IS_DESKTOP ? DesktopShell : RootShell,
   component: RootComponent,
   notFoundComponent: NotFoundComponent,
   errorComponent: ErrorComponent,
 });
+
+// The desktop (Electron) build mounts into an existing <div id="root">, so it
+// must NOT render its own <html>/<head>/<body> document shell.
+function DesktopShell({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
+}
 
 function RootShell({ children }: { children: React.ReactNode }) {
   return (
@@ -60,6 +70,7 @@ function RootShell({ children }: { children: React.ReactNode }) {
     </html>
   );
 }
+
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();

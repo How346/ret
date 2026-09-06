@@ -22,11 +22,14 @@ export default defineConfig({
     ],
     dedupe: ["react", "react-dom", "@tanstack/react-router", "@tanstack/react-query"],
   },
-  define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  define: {
+    "process.env.NODE_ENV": JSON.stringify("production"),
+    "import.meta.env.VITE_DESKTOP": JSON.stringify("true"),
+  },
+
   build: {
     outDir: path.resolve(__dirname, "dist-electron"),
     emptyOutDir: true,
     target: "chrome120",
-    chunkSizeWarningLimit: 1000,
   },
 });

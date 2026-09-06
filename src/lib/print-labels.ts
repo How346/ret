@@ -4,6 +4,7 @@
 // does NOT grow the label.
 
 import JsBarcode from "jsbarcode";
+import { dispatchPrintHtml } from "@/lib/print-dispatch";
 
 export type LabelItem = {
   name: string;
@@ -193,12 +194,7 @@ export function printLabels(items: LabelItem[], size: LabelSize = DEFAULT_SIZE) 
       }
     </style></head>
     <body><div class="sheet">${cells}</div>
-    <script>setTimeout(()=>{try{window.print()}catch(_){} }, 300);</script>
     </body></html>`;
 
-  const w = window.open("", "_blank", "width=520,height=640");
-  if (!w) return;
-  w.document.write(html);
-  w.document.close();
-  w.focus();
+  dispatchPrintHtml(html, { kind: "label", windowWidth: 520, windowHeight: 640 });
 }

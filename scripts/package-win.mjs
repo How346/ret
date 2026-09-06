@@ -1,8 +1,16 @@
 import { packager } from '@electron/packager';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const require = createRequire(import.meta.url);
+
+const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+const electronVersion = JSON.parse(
+  readFileSync(require.resolve('electron/package.json'), 'utf8'),
+).version;
 
 const ignore = [
   /^\/node_modules($|\/)/,
@@ -19,13 +27,14 @@ const ignore = [
 const paths = await packager({
   dir: root,
   name: 'Margin ERP Offline',
+  appVersion: pkg.version || '1.0.0',
+  buildVersion: pkg.version || '1.0.0',
+  electronVersion,
   platform: 'win32',
   arch: 'x64',
   out: path.join(root, 'electron-release'),
   overwrite: true,
   prune: true,
-  appVersion: '1.0.0',
-  electronVersion: '44.1.1',
   ignore,
 });
 

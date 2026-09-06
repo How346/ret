@@ -22,14 +22,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let disposed = false;
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
-      if (disposed) return;
       setSession(s);
       if (s?.user) {
-        // Defer role fetch to avoid auth-listener deadlocks.
+        // defer role fetch to avoid deadlocks
         setTimeout(async () => {
-          if (disposed) return;
           const { data } = await supabase
             .from("user_roles")
             .select("role")
@@ -37,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .order("role", { ascending: true })
             .limit(1)
             .maybeSingle();
-          if (!disposed) setRole((data?.role as Role) ?? "cashier");
+          setRole((data?.role as Role) ?? "cashier");
         }, 0);
       } else {
         setRole(null);
@@ -45,15 +42,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     supabase.auth.getSession().then(({ data: { session: s } }) => {
-      if (disposed) return;
       setSession(s);
       setLoading(false);
     });
 
-    return () => {
-      disposed = true;
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
   return (

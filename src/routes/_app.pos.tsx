@@ -255,10 +255,23 @@ function POS() {
     refetchHeld();
   };
 
-  // IMPORTANT: Do not install a window/document-level keydown listener here.
-  // Electron must receive normal keyboard input natively. Global handlers can
-  // stall the renderer before a character reaches an <input>.
-  // POS actions are handled by the individual controls instead.
+  // Keyboard shortcuts — Marg-style
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const inField = /INPUT|TEXTAREA|SELECT/.test((e.target as HTMLElement)?.tagName ?? "");
+      if (e.key === "F1" || e.key === "F2") { e.preventDefault(); searchRef.current?.focus(); }
+      else if (e.key === "F3" || e.key === "End") { e.preventDefault(); const el = document.getElementById("bill-discount"); (el as HTMLInputElement)?.focus(); (el as HTMLInputElement)?.select?.(); }
+      else if (e.key === "F4") { e.preventDefault(); if (cart.length) setPayOpen(true); }
+      else if (e.key === "F5") { e.preventDefault(); holdBill(); }
+      else if (e.key === "F6") { e.preventDefault(); const el = document.getElementById("recall-btn"); (el as HTMLElement)?.click(); }
+      else if (e.key === "F8") { e.preventDefault(); window.print(); }
+      else if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); if (cart.length) setPayOpen(true); }
+      else if (e.key === "Escape" && !payOpen && !inField) { e.preventDefault(); clearBill(); }
+      else if (e.key === "Escape" && payOpen) setPayOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
 
   useEffect(() => { searchRef.current?.focus(); }, []);
