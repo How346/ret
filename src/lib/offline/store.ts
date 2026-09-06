@@ -59,6 +59,8 @@ const DEFAULTS: Record<string, Row> = {
     show_gst_breakdown: true, receipt_bold: false, receipt_font_size: 12,
     receipt_line_height: 1.25, receipt_margin_top: 4, receipt_margin_bottom: 6,
     receipt_margin_left: 3, receipt_margin_right: 3,
+    whatsapp_enabled: false, whatsapp_country_code: "91",
+    whatsapp_message_template: "Hi {customer}, thank you for shopping at {shop}! Your bill {invoice} of {total} is attached. Visit again!",
   },
 };
 

@@ -20,7 +20,9 @@ import {
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useStoreSettings } from "@/hooks/use-store-settings";
-import { printReceipt } from "@/lib/print-receipt";
+import { printReceipt, buildReceiptHtml } from "@/lib/print-receipt";
+import { sendReceiptOnWhatsApp, fillWhatsAppTemplate, normalizeWhatsAppPhone } from "@/lib/whatsapp-send";
+import { MessageCircle } from "lucide-react";
 
 export const Route = createFileRoute("/_app/pos")({
   component: POS,
@@ -55,6 +57,11 @@ function POS() {
   const [priceLevel, setPriceLevel] = useState<PriceLevel>("sale");
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [payOpen, setPayOpen] = useState(false);
+  const [waAsk, setWaAsk] = useState<{
+    phone: string;
+    html: string;
+    message: string;
+  } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Products
@@ -487,7 +494,8 @@ function POS() {
         open={payOpen}
         onOpenChange={setPayOpen}
         total={totals.total}
-        onConfirm={async (split) => {
+        whatsappEnabled={!!settings?.whatsapp_enabled}
+        onConfirm={async (split, action) => {
           try {
             const rpcName = (settings?.bill_no_format ?? "short") === "short" ? "next_invoice_no_short" : "next_invoice_no";
             const { data: invNo } = await supabase.rpc(rpcName as any);
@@ -549,23 +557,43 @@ function POS() {
             setPayOpen(false);
             clearBill();
             const customer = customers.find((c: any) => c.id === customerId) ?? null;
-            if (settings?.auto_print !== false) {
-              printReceipt({
-                invoiceNo: invNo as unknown as string,
-                cart: distCart.map(it => {
-                  const prod = products.find(p => p.id === it.product_id.split(":")[0]);
-                  return { name: it.name, hsn_code: it.hsn_code, qty: it.qty, price: it.price, mrp: it.mrp ?? prod?.mrp ?? it.price, discount: it.discount, gst_rate: it.gst_rate };
-                }),
-                totals: { subtotal: totals.subtotal, cgst: totals.cgst, sgst: totals.sgst, discount: 0, total: totals.total },
-                payment: split,
-                customer: customer as any,
-                settings,
+
+            const receiptArgs = {
+              invoiceNo: invNo as unknown as string,
+              cart: distCart.map(it => {
+                const prod = products.find(p => p.id === it.product_id.split(":")[0]);
+                return { name: it.name, hsn_code: it.hsn_code, qty: it.qty, price: it.price, mrp: it.mrp ?? prod?.mrp ?? it.price, discount: it.discount, gst_rate: it.gst_rate };
+              }),
+              totals: { subtotal: totals.subtotal, cgst: totals.cgst, sgst: totals.sgst, discount: 0, total: totals.total },
+              payment: split,
+              customer: customer as any,
+              settings,
+            };
+
+            if (action === "print") {
+              printReceipt(receiptArgs);
+            } else if (action === "whatsapp") {
+              const html = buildReceiptHtml(receiptArgs);
+              const message = fillWhatsAppTemplate(settings?.whatsapp_message_template, {
+                customer: customer?.name || "Customer",
+                shop: settings?.shop_name || "our store",
+                invoice: invNo as unknown as string,
+                total: inr(totals.total),
               });
+              const phone = normalizeWhatsAppPhone(customer?.phone || "", settings?.whatsapp_country_code);
+              setWaAsk({ phone, html, message });
             }
+            // action === "save": bill is already saved above, nothing further to do.
           } catch (err: any) {
             toast.error(err.message ?? "Failed to save sale");
           }
         }}
+      />
+
+      <WhatsAppSendDialog
+        ask={waAsk}
+        paperSize={settings?.paper_size}
+        onClose={() => setWaAsk(null)}
       />
 
     </div>
@@ -652,9 +680,15 @@ function CustomerPicker({
 }
 
 function PaymentDialog({
-  open, onOpenChange, total, onConfirm,
-}: { open: boolean; onOpenChange: (b: boolean) => void; total: number; onConfirm: (split: { cash: number; card: number; upi: number }) => void | Promise<void> }) {
-  const [saving, setSaving] = useState(false);
+  open, onOpenChange, total, onConfirm, whatsappEnabled,
+}: {
+  open: boolean;
+  onOpenChange: (b: boolean) => void;
+  total: number;
+  whatsappEnabled: boolean;
+  onConfirm: (split: { cash: number; card: number; upi: number }, action: "print" | "save" | "whatsapp") => void | Promise<void>;
+}) {
+  const [saving, setSaving] = useState<null | "print" | "save" | "whatsapp">(null);
   const [cash, setCash] = useState(0);
   const [card, setCard] = useState(0);
   const [upi, setUpi] = useState(0);
@@ -707,19 +741,112 @@ function PaymentDialog({
           {change < 0 && <div className="text-xs text-destructive mt-1">Short by {inr(Math.abs(change))}</div>}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button>
+        <DialogFooter className="flex-col sm:flex-row gap-2 sm:gap-2">
+          <Button variant="outline" disabled={!!saving} onClick={() => onOpenChange(false)} className="sm:mr-auto">
+            Cancel
+          </Button>
           <Button
-            ref={confirmRef}
-            disabled={paid < total - 0.01 || saving}
+            variant="outline"
+            disabled={paid < total - 0.01 || !!saving}
             onClick={async () => {
               if (saving) return;
-              setSaving(true);
-              try { await onConfirm({ cash, card, upi }); } finally { setSaving(false); }
+              setSaving("save");
+              try { await onConfirm({ cash, card, upi }, "save"); } finally { setSaving(null); }
             }}
           >
-            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {saving ? "Processing…" : "Confirm & Print"}
+            {saving === "save" && <Loader2 className="h-4 w-4 animate-spin" />}
+            Confirm Only
+          </Button>
+          {whatsappEnabled && (
+            <Button
+              variant="outline"
+              disabled={paid < total - 0.01 || !!saving}
+              onClick={async () => {
+                if (saving) return;
+                setSaving("whatsapp");
+                try { await onConfirm({ cash, card, upi }, "whatsapp"); } finally { setSaving(null); }
+              }}
+            >
+              {saving === "whatsapp" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+              Confirm & Send
+            </Button>
+          )}
+          <Button
+            ref={confirmRef}
+            disabled={paid < total - 0.01 || !!saving}
+            onClick={async () => {
+              if (saving) return;
+              setSaving("print");
+              try { await onConfirm({ cash, card, upi }, "print"); } finally { setSaving(null); }
+            }}
+          >
+            {saving === "print" && <Loader2 className="h-4 w-4 animate-spin" />}
+            {saving === "print" ? "Processing…" : "Confirm & Print"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function WhatsAppSendDialog({
+  ask, paperSize, onClose,
+}: {
+  ask: { phone: string; html: string; message: string } | null;
+  paperSize?: "58mm" | "80mm" | "A4";
+  onClose: () => void;
+}) {
+  const [phone, setPhone] = useState("");
+  const [sending, setSending] = useState(false);
+  useEffect(() => { setPhone(ask?.phone ?? ""); }, [ask]);
+
+  return (
+    <Dialog open={!!ask} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="font-display flex items-center gap-2">
+            <MessageCircle className="h-4 w-4" /> Send bill on WhatsApp
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label>WhatsApp number</Label>
+            <Input
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="10-digit mobile number"
+              autoFocus
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The bill will open a WhatsApp chat for this number with the image copied to your
+            clipboard — just paste (Ctrl+V) it into the chat and send.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={sending} onClick={onClose}>Skip</Button>
+          <Button
+            disabled={!phone.trim() || sending}
+            onClick={async () => {
+              if (!ask) return;
+              setSending(true);
+              try {
+                const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
+                if (res.success) {
+                  toast.success(res.mode === "desktop-image"
+                    ? "WhatsApp opened — paste the image (Ctrl+V) and send"
+                    : "WhatsApp opened");
+                } else {
+                  toast.error("Couldn't open WhatsApp — check the number and try again");
+                }
+              } finally {
+                setSending(false);
+                onClose();
+              }
+            }}
+          >
+            {sending && <Loader2 className="h-4 w-4 animate-spin" />}
+            Open WhatsApp
           </Button>
         </DialogFooter>
       </DialogContent>

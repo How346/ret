@@ -17,6 +17,9 @@ export type StoreSettings = PrintSettings & {
   receipt_margin_right?: number;
   receipt_bold?: boolean;
   receipt_line_height?: number;
+  whatsapp_enabled?: boolean;
+  whatsapp_country_code?: string;
+  whatsapp_message_template?: string;
 };
 
 export function useStoreSettings() {

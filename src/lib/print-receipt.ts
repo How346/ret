@@ -75,6 +75,24 @@ export function printReceipt(opts: {
   settings?: Partial<PrintSettings> | null;
   cashierName?: string | null;
 }) {
+  const html = buildReceiptHtml(opts);
+  const s: PrintSettings = { ...DEFAULTS, ...(opts.settings ?? {}) } as PrintSettings;
+  dispatchPrintHtml(html, { kind: "receipt", windowWidth: s.paper_size === "A4" ? 800 : 380, windowHeight: 720 });
+}
+
+// Builds the receipt HTML document without printing it — used by printReceipt()
+// above and by the WhatsApp bill-sharing flow, which needs the same markup
+// rendered to an image instead of sent to a printer.
+export function buildReceiptHtml(opts: {
+  invoiceNo: string;
+  date?: Date;
+  customer?: { name?: string; phone?: string | null; gstin?: string | null } | null;
+  cart: ReceiptItem[];
+  totals: ReceiptTotals;
+  payment: ReceiptPayment;
+  settings?: Partial<PrintSettings> | null;
+  cashierName?: string | null;
+}): string {
   const s: PrintSettings = { ...DEFAULTS, ...(opts.settings ?? {}) } as PrintSettings;
   const widthMm = s.paper_size === "58mm" ? 58 : s.paper_size === "80mm" ? 80 : 210;
   const defaultFont = s.paper_size === "58mm" ? 12 : s.paper_size === "80mm" ? 13 : 13;
@@ -256,7 +274,7 @@ export function printReceipt(opts: {
   </div>`).join("")}
   </body></html>`;
 
-  dispatchPrintHtml(html, { kind: "receipt", windowWidth: s.paper_size === "A4" ? 800 : 380, windowHeight: 720 });
+  return html;
 }
 
 function escapeHtml(s: string) {

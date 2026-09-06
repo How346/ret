@@ -13,7 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { Printer, Store, Upload, User, Building2, HardDrive, FolderOpen, DownloadCloud, RotateCcw, KeyRound } from "lucide-react";
+import { Printer, Store, Upload, User, Building2, HardDrive, FolderOpen, DownloadCloud, RotateCcw, KeyRound, MessageCircle } from "lucide-react";
 import { printReceipt } from "@/lib/print-receipt";
 import {
   isDesktopPrintingAvailable,
@@ -100,6 +100,7 @@ function Settings() {
         <TabsList>
           <TabsTrigger value="shop"><Store className="h-3.5 w-3.5 mr-1" /> Shop</TabsTrigger>
           <TabsTrigger value="print"><Printer className="h-3.5 w-3.5 mr-1" /> Printing</TabsTrigger>
+          <TabsTrigger value="whatsapp"><MessageCircle className="h-3.5 w-3.5 mr-1" /> WhatsApp</TabsTrigger>
           <TabsTrigger value="bank"><Building2 className="h-3.5 w-3.5 mr-1" /> Bank / UPI</TabsTrigger>
           <TabsTrigger value="data"><HardDrive className="h-3.5 w-3.5 mr-1" /> Store Data</TabsTrigger>
           <TabsTrigger value="license"><KeyRound className="h-3.5 w-3.5 mr-1" /> License</TabsTrigger>
@@ -296,6 +297,44 @@ function Settings() {
                 <li>In Products page, tick the items you want, click <b>Print Labels</b> and pick the same dimensions in the dialog.</li>
               </ul>
             </div>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="whatsapp" className="mt-4">
+          <Card className="p-6 space-y-4">
+            <Toggle
+              label="Enable WhatsApp bill sharing"
+              checked={!!form.whatsapp_enabled}
+              onChange={v => set({ whatsapp_enabled: v })}
+            />
+            <p className="text-xs text-muted-foreground -mt-2">
+              When on, the POS payment screen shows a "Confirm & Send" button. It saves the sale, then
+              opens a WhatsApp chat for the customer's number with a message pre-filled — on the desktop
+              app the bill image is also copied to your clipboard, ready to paste (Ctrl+V) into the chat.
+            </p>
+            <div className="grid md:grid-cols-3 gap-4 pt-2 border-t border-border">
+              <Field label="Default country code">
+                <Input
+                  value={form.whatsapp_country_code ?? "91"}
+                  onChange={e => set({ whatsapp_country_code: e.target.value.replace(/[^\d]/g, "") })}
+                  placeholder="91"
+                  disabled={!form.whatsapp_enabled}
+                />
+              </Field>
+              <Field label="Message template" className="md:col-span-2">
+                <Textarea
+                  rows={3}
+                  value={form.whatsapp_message_template ?? ""}
+                  onChange={e => set({ whatsapp_message_template: e.target.value })}
+                  placeholder="Hi {customer}, thank you for shopping at {shop}! Your bill {invoice} of {total} is attached. Visit again!"
+                  disabled={!form.whatsapp_enabled}
+                />
+              </Field>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Placeholders: <code>{"{customer}"}</code>, <code>{"{shop}"}</code>, <code>{"{invoice}"}</code>, <code>{"{total}"}</code>.
+              Numbers with 10 digits automatically get the country code above added in front.
+            </p>
           </Card>
         </TabsContent>
 
