@@ -13,7 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { Printer, Store, Upload, User, Building2, HardDrive, FolderOpen, DownloadCloud, RotateCcw, KeyRound, MessageCircle } from "lucide-react";
+import { Printer, Store, Upload, User, Building2, HardDrive, FolderOpen, DownloadCloud, RotateCcw, KeyRound, MessageCircle, Loader2 } from "lucide-react";
 import { printReceipt } from "@/lib/print-receipt";
 import {
   isDesktopPrintingAvailable,
@@ -24,6 +24,7 @@ import {
   setSilentPrint,
   type PrinterInfo,
 } from "@/lib/printer-prefs";
+import { openWhatsAppWeb } from "@/lib/whatsapp-send";
 import { backupSupported, pickBackupFolder, getSavedFolder, forgetFolder, runBackup, restoreBackup } from "@/lib/local-backup";
 import { useMyLicense, licenseStatus, redeemLicenseKey } from "@/hooks/use-license";
 import { useQueryClient as useQC2 } from "@tanstack/react-query";
@@ -40,6 +41,7 @@ function Settings() {
   const [saving, setSaving] = useState(false);
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
   const [printerPrefs, setPrinterPrefs] = useState(getPrinterPrefs());
+  const [waConnecting, setWaConnecting] = useState(false);
   const desktopPrinting = isDesktopPrintingAvailable();
 
   useEffect(() => { if (settings) setForm({ ...settings }); }, [settings]);
@@ -335,6 +337,32 @@ function Settings() {
               Placeholders: <code>{"{customer}"}</code>, <code>{"{shop}"}</code>, <code>{"{invoice}"}</code>, <code>{"{total}"}</code>.
               Numbers with 10 digits automatically get the country code above added in front.
             </p>
+            {isDesktopPrintingAvailable() && (
+              <div className="rounded-md border border-border p-3 space-y-2 pt-3 border-t">
+                <div className="font-semibold flex items-center gap-1 text-sm"><MessageCircle className="h-3.5 w-3.5" /> WhatsApp Web login</div>
+                <p className="text-xs text-muted-foreground">
+                  Log in once by scanning the QR code — this app keeps you signed in on this computer,
+                  the same way web.whatsapp.com does in a browser tab.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={waConnecting}
+                  onClick={async () => {
+                    setWaConnecting(true);
+                    try {
+                      const res = await openWhatsAppWeb();
+                      if (!res.success) toast.error("Couldn't open WhatsApp Web");
+                    } finally {
+                      setWaConnecting(false);
+                    }
+                  }}
+                >
+                  {waConnecting && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+                  Open WhatsApp Web (scan QR / login)
+                </Button>
+              </div>
+            )}
           </Card>
         </TabsContent>
 

@@ -21,7 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useStoreSettings } from "@/hooks/use-store-settings";
 import { printReceipt, buildReceiptHtml } from "@/lib/print-receipt";
-import { sendReceiptOnWhatsApp, fillWhatsAppTemplate, normalizeWhatsAppPhone } from "@/lib/whatsapp-send";
+import { sendReceiptOnWhatsApp, fillWhatsAppTemplate, normalizeWhatsAppPhone, openWhatsAppWeb } from "@/lib/whatsapp-send";
 import { MessageCircle } from "lucide-react";
 
 export const Route = createFileRoute("/_app/pos")({
@@ -695,7 +695,8 @@ function PaymentDialog({
   const cashRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLInputElement>(null);
   const upiRef = useRef<HTMLInputElement>(null);
-  const confirmRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const actionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   useEffect(() => { if (open) { setCash(total); setCard(0); setUpi(0); } }, [open, total]);
   useEffect(() => {
     if (!open) return;
@@ -713,6 +714,56 @@ function PaymentDialog({
 
   const paid = cash + card + upi;
   const change = paid - total;
+  const canConfirm = paid >= total - 0.01 && !saving;
+
+  const run = async (action: "print" | "save" | "whatsapp") => {
+    if (saving) return;
+    setSaving(action);
+    try { await onConfirm({ cash, card, upi }, action); } finally { setSaving(null); }
+  };
+
+  // Left/Right (and Up/Down) arrow-key navigation across the confirm
+  // buttons below, so a cashier working entirely from the keyboard can
+  // move between "Confirm Only" / "Confirm & Send" / "Confirm & Print"
+  // without reaching for the mouse.
+  const onActionsKeyDown = (e: React.KeyboardEvent) => {
+    if (!["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const refs = actionRefs.current.filter((el): el is HTMLButtonElement => !!el);
+    if (!refs.length) return;
+    const activeIdx = refs.indexOf(document.activeElement as HTMLButtonElement);
+    const forward = e.key === "ArrowRight" || e.key === "ArrowDown";
+    const nextIdx = activeIdx === -1
+      ? (forward ? 0 : refs.length - 1)
+      : (activeIdx + (forward ? 1 : -1) + refs.length) % refs.length;
+    refs[nextIdx]?.focus();
+  };
+
+  const actions = [
+    {
+      key: "save" as const,
+      label: "Confirm Only",
+      hint: "Save the bill — no printing, no sending",
+      variant: "outline" as const,
+      icon: null as React.ReactNode,
+    },
+    ...(whatsappEnabled
+      ? [{
+          key: "whatsapp" as const,
+          label: "Confirm & Send",
+          hint: "Save, then send on WhatsApp",
+          variant: "outline" as const,
+          icon: <MessageCircle className="h-4 w-4" />,
+        }]
+      : []),
+    {
+      key: "print" as const,
+      label: "Confirm & Print",
+      hint: "Save and print the receipt",
+      variant: "default" as const,
+      icon: <Printer className="h-4 w-4" />,
+    },
+  ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -741,48 +792,37 @@ function PaymentDialog({
           {change < 0 && <div className="text-xs text-destructive mt-1">Short by {inr(Math.abs(change))}</div>}
         </div>
 
-        <DialogFooter className="flex-col sm:flex-row gap-2 sm:gap-2">
-          <Button variant="outline" disabled={!!saving} onClick={() => onOpenChange(false)} className="sm:mr-auto">
+        <DialogFooter className="flex-col items-stretch gap-3 sm:flex-col sm:items-stretch">
+          <Button variant="ghost" size="sm" disabled={!!saving} onClick={() => onOpenChange(false)} className="self-start px-2 h-8 text-muted-foreground">
             Cancel
           </Button>
-          <Button
-            variant="outline"
-            disabled={paid < total - 0.01 || !!saving}
-            onClick={async () => {
-              if (saving) return;
-              setSaving("save");
-              try { await onConfirm({ cash, card, upi }, "save"); } finally { setSaving(null); }
-            }}
+          <div
+            role="group"
+            aria-label="Confirm payment"
+            onKeyDown={onActionsKeyDown}
+            className="grid gap-2"
+            style={{ gridTemplateColumns: `repeat(${actions.length}, minmax(0, 1fr))` }}
           >
-            {saving === "save" && <Loader2 className="h-4 w-4 animate-spin" />}
-            Confirm Only
-          </Button>
-          {whatsappEnabled && (
-            <Button
-              variant="outline"
-              disabled={paid < total - 0.01 || !!saving}
-              onClick={async () => {
-                if (saving) return;
-                setSaving("whatsapp");
-                try { await onConfirm({ cash, card, upi }, "whatsapp"); } finally { setSaving(null); }
-              }}
-            >
-              {saving === "whatsapp" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
-              Confirm & Send
-            </Button>
-          )}
-          <Button
-            ref={confirmRef}
-            disabled={paid < total - 0.01 || !!saving}
-            onClick={async () => {
-              if (saving) return;
-              setSaving("print");
-              try { await onConfirm({ cash, card, upi }, "print"); } finally { setSaving(null); }
-            }}
-          >
-            {saving === "print" && <Loader2 className="h-4 w-4 animate-spin" />}
-            {saving === "print" ? "Processing…" : "Confirm & Print"}
-          </Button>
+            {actions.map((a, idx) => (
+              <Button
+                key={a.key}
+                ref={(el) => {
+                  actionRefs.current[idx] = el;
+                  if (a.key === "print") confirmRef.current = el;
+                }}
+                variant={a.variant}
+                title={a.hint}
+                disabled={!canConfirm && saving !== a.key}
+                className="h-auto py-2.5 flex-col gap-1 whitespace-normal text-center"
+                onClick={() => run(a.key)}
+              >
+                <span className="flex items-center gap-1.5">
+                  {saving === a.key ? <Loader2 className="h-4 w-4 animate-spin" /> : a.icon}
+                  <span className="font-medium">{a.label}</span>
+                </span>
+              </Button>
+            ))}
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -798,6 +838,7 @@ function WhatsAppSendDialog({
 }) {
   const [phone, setPhone] = useState("");
   const [sending, setSending] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   useEffect(() => { setPhone(ask?.phone ?? ""); }, [ask]);
 
   return (
@@ -809,6 +850,24 @@ function WhatsAppSendDialog({
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full"
+            disabled={connecting}
+            onClick={async () => {
+              setConnecting(true);
+              try {
+                const res = await openWhatsAppWeb();
+                if (!res.success) toast.error("Couldn't open WhatsApp Web");
+              } finally {
+                setConnecting(false);
+              }
+            }}
+          >
+            {connecting && <Loader2 className="h-4 w-4 animate-spin" />}
+            Open WhatsApp Web (scan QR / login)
+          </Button>
           <div>
             <Label>WhatsApp number</Label>
             <Input
@@ -819,8 +878,9 @@ function WhatsAppSendDialog({
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            The bill will open a WhatsApp chat for this number with the image copied to your
-            clipboard — just paste (Ctrl+V) it into the chat and send.
+            First time only: log in above by scanning the QR code. After that, "Send" will open the
+            customer's chat in that same WhatsApp Web session with the bill image copied to your
+            clipboard — just paste (Ctrl+V) it into the chat and press send.
           </p>
         </div>
         <DialogFooter>
@@ -833,8 +893,8 @@ function WhatsAppSendDialog({
               try {
                 const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
                 if (res.success) {
-                  toast.success(res.mode === "desktop-image"
-                    ? "WhatsApp opened — paste the image (Ctrl+V) and send"
+                  toast.success(res.mode === "desktop-web"
+                    ? "WhatsApp Web opened — paste the image (Ctrl+V) and send"
                     : "WhatsApp opened");
                 } else {
                   toast.error("Couldn't open WhatsApp — check the number and try again");
@@ -846,7 +906,7 @@ function WhatsAppSendDialog({
             }}
           >
             {sending && <Loader2 className="h-4 w-4 animate-spin" />}
-            Open WhatsApp
+            Send
           </Button>
         </DialogFooter>
       </DialogContent>

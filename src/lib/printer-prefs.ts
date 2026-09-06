@@ -18,12 +18,13 @@ type ElectronPrintAPI = {
     html: string,
     options?: { deviceName?: string; silent?: boolean; copies?: number },
   ) => Promise<{ success: boolean; errorType?: string }>;
-  sendReceiptWhatsApp: (
+  openWhatsAppWeb: () => Promise<{ success: boolean; errorType?: string }>;
+  sendReceiptWhatsAppWeb: (
     html: string,
     phone: string,
     message: string,
     widthPx?: number,
-  ) => Promise<{ success: boolean; errorType?: string; imagePath?: string | null }>;
+  ) => Promise<{ success: boolean; errorType?: string; imaged?: boolean }>;
 };
 
 declare global {
