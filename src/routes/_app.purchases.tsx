@@ -152,41 +152,78 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => { barcodeRef.current?.focus(); }, []);
 
-  // ---- Marg-style keyboard flow: Enter walks the row, End saves ----
+  // ---- Marg-style keyboard flow ----
+  // Enter walks: (row) Barcode → HSN → Qty → MRP → Sale → GST% → back to the
+  // scan box. Cost is skipped in this chain (still reachable/editable by
+  // clicking into it directly). Arrow keys give full spreadsheet-style
+  // navigation: Up/Down move between rows in the same column, Left/Right
+  // move to the neighbouring column once the cursor is at the start/end of
+  // the text. End saves the whole bill.
   const cellRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const COLS = ["barcode", "hsn", "qty", "cost", "mrp", "sale", "gst"] as const;
+  const COL_ORDER = ["barcode", "hsn", "qty", "cost", "mrp", "sale", "gst"] as const;
+  type Col = typeof COL_ORDER[number];
+  const NEXT_COL: Record<Col, Col | null> = {
+    barcode: "hsn",
+    hsn: "qty",
+    qty: "mrp",
+    cost: "mrp",
+    mrp: "sale",
+    sale: "gst",
+    gst: null, // end of row → loop back to the top scan box
+  };
   const setCell = (idx: number, col: string) => (el: HTMLInputElement | null) => {
     cellRefs.current[`${idx}:${col}`] = el;
   };
-  const cellKeyDown = (idx: number, col: string) => (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== "Enter") return;
-    e.preventDefault();
-    // The fast scan-driven flow only needs HSN then Qty — once Qty is
-    // confirmed, jump straight back to the barcode box for the next item
-    // instead of continuing through Cost/MRP/Sale/GST (those come
-    // pre-filled from the product master and are edited by clicking in
-    // directly, not as part of the scan loop).
-    if (col === "qty") {
-      setItems((arr) => ensureTrailingRow(arr));
-      setTimeout(() => { barcodeRef.current?.focus(); barcodeRef.current?.select(); }, 30);
-      return;
-    }
-    const pos = COLS.indexOf(col as typeof COLS[number]);
-    const next = COLS[pos + 1];
-    if (next) {
-      const el = cellRefs.current[`${idx}:${next}`];
-      el?.focus(); el?.select();
-      return;
-    }
-    // End of the row → make sure a blank row exists and jump back to scanning
+  const focusCell = (idx: number, col: string, selectAll = true) => {
+    const el = cellRefs.current[`${idx}:${col}`];
+    if (!el) return false;
+    el.focus();
+    if (selectAll) el.select();
+    return true;
+  };
+  const loopBackToScan = () => {
     setItems((arr) => ensureTrailingRow(arr));
     setTimeout(() => { barcodeRef.current?.focus(); barcodeRef.current?.select(); }, 30);
   };
+  const cellKeyDown = (idx: number, col: Col) => (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const input = e.currentTarget;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const next = NEXT_COL[col];
+      if (next && focusCell(idx, next)) return;
+      loopBackToScan();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      focusCell(idx + 1, col);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (idx === 0) { barcodeRef.current?.focus(); barcodeRef.current?.select(); return; }
+      focusCell(idx - 1, col);
+      return;
+    }
+    if (e.key === "ArrowLeft" && input.selectionStart === 0 && input.selectionEnd === 0) {
+      const pos = COL_ORDER.indexOf(col);
+      const prev = COL_ORDER[pos - 1];
+      if (prev) { e.preventDefault(); focusCell(idx, prev, false); }
+      return;
+    }
+    if (
+      e.key === "ArrowRight" &&
+      input.selectionStart === input.value.length &&
+      input.selectionEnd === input.value.length
+    ) {
+      const pos = COL_ORDER.indexOf(col);
+      const next = COL_ORDER[pos + 1];
+      if (next) { e.preventDefault(); focusCell(idx, next, false); }
+      return;
+    }
+  };
   const focusRowCell = (idx: number, col: string) => {
-    setTimeout(() => {
-      const el = cellRefs.current[`${idx}:${col}`];
-      el?.focus(); el?.select();
-    }, 30);
+    setTimeout(() => { focusCell(idx, col); }, 30);
   };
 
 
@@ -406,6 +443,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
             onChange={(e) => setBarcode(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") { e.preventDefault(); handleBarcode(barcode); }
+              else if (e.key === "ArrowDown") { e.preventDefault(); focusCell(0, "barcode"); }
             }}
             placeholder="Scan barcode and press Enter, or press Ctrl+I to pick from all items"
             className="mt-1 font-mono"
@@ -512,7 +550,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         <DialogFooter className="sm:justify-between border-t pt-3 mt-1 shrink-0 bg-background">
 
           <div className="text-xs text-muted-foreground self-center">
-            Enter = next field · Barcode→HSN→Qty→back to scan · Ctrl+I = pick from all items · End = Save Purchase
+            Enter: Barcode→HSN→Qty→MRP→Sale→GST%→back to scan · ↑↓←→ move between cells · Ctrl+I = pick from all items · End = Save Purchase
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>Cancel</Button>

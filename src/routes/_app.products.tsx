@@ -12,7 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Search, AlertTriangle, Sparkles, Upload, Download, Tags, QrCode, Loader2, Trash2, Printer, Image as ImageIcon, Layers, History as HistoryIcon, Eye } from "lucide-react";
+import { Plus, Pencil, Search, AlertTriangle, Upload, Download, Tags, Loader2, Trash2, Printer, Image as ImageIcon, Layers, History as HistoryIcon, Eye } from "lucide-react";
 import { inr, num } from "@/lib/format";
 import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -347,57 +347,19 @@ function ProductForm({ value, onChange, categories }: {
   value: Partial<Product>; onChange: (v: Partial<Product>) => void;
   categories: { id: string; name: string }[];
 }) {
-  const [aiBusy, setAiBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const set = (k: keyof Product, v: any) => onChange({ ...value, [k]: v });
 
-  const aiLookup = async () => {
-    if (!value.barcode && !value.name) return toast.error("Enter a barcode or partial name first");
-    setAiBusy(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("barcode-lookup", {
-        body: { barcode: value.barcode ?? "", hint: value.name ?? "" },
-      });
-      if (error) throw error;
-      const s = (data as any)?.suggestion;
-      if (!s) throw new Error("AI returned no suggestion");
-      onChange({
-        ...value,
-        name: s.name ?? value.name,
-        hsn_code: s.hsn_code ?? value.hsn_code,
-        unit: s.unit ?? value.unit,
-        gst_rate: s.gst_rate ?? value.gst_rate,
-        mrp: s.mrp ?? value.mrp,
-        sale_price: s.sale_price ?? s.mrp ?? value.sale_price,
-        purchase_price: s.purchase_price ?? value.purchase_price,
-      });
-      toast.success("AI filled the form — review & save");
-    } catch (e: any) {
-      toast.error(e.message || "AI lookup failed");
-    } finally {
-      setAiBusy(false);
-    }
-  };
-
   return (
     <div className="grid grid-cols-2 gap-3">
-      <div className="col-span-2 flex items-end gap-2">
-        <div className="flex-1"><Label>Name *</Label><Input value={value.name ?? ""} onChange={e => set("name", e.target.value)} /></div>
-        <Button type="button" variant="secondary" onClick={aiLookup} disabled={aiBusy} title="Lookup with AI">
-          {aiBusy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
-          AI Fill
-        </Button>
+      <div className="col-span-2">
+        <Label>Name *</Label><Input value={value.name ?? ""} onChange={e => set("name", e.target.value)} />
       </div>
       <div><Label>SKU</Label><Input value={value.sku ?? ""} onChange={e => set("sku", e.target.value)} /></div>
       <div>
         <Label>Barcode</Label>
-        <div className="flex gap-1">
-          <Input value={value.barcode ?? ""} onChange={e => set("barcode", e.target.value)} placeholder="Scan or type" />
-          <Button type="button" variant="outline" size="icon" title="Detect with AI" disabled={aiBusy} onClick={aiLookup}>
-            {aiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
-          </Button>
-        </div>
+        <Input value={value.barcode ?? ""} onChange={e => set("barcode", e.target.value)} placeholder="Scan or type" />
       </div>
       <div>
         <Label>Category</Label>

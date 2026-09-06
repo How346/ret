@@ -37,14 +37,45 @@ export function focusNextInSequence(
 }
 
 export function onEnterFocusNext(e: KeyboardEvent<HTMLElement>) {
-  if (e.key !== "Enter") return;
   const target = e.target as HTMLElement;
   // Only hijack plain text/number inputs — leave buttons, selects, textareas
   // (which need Enter/newline or their own activation) alone.
   if (target.tagName !== "INPUT") return;
   const input = target as HTMLInputElement;
   if (input.type === "checkbox" || input.type === "radio") return;
-  const container = target.closest("[data-enter-nav]") as HTMLElement | null;
-  const moved = focusNextInSequence(target, container, e.shiftKey ? -1 : 1);
-  if (moved) e.preventDefault();
+
+  if (e.key === "Enter") {
+    const container = target.closest("[data-enter-nav]") as HTMLElement | null;
+    const moved = focusNextInSequence(target, container, e.shiftKey ? -1 : 1);
+    if (moved) e.preventDefault();
+    return;
+  }
+
+  // Full arrow-key support: Up/Down always move to the previous/next field;
+  // Left/Right move once the cursor is already at the start/end of the text
+  // so normal in-field cursor movement still works.
+  if (e.key === "ArrowDown") {
+    const container = target.closest("[data-enter-nav]") as HTMLElement | null;
+    if (focusNextInSequence(target, container, 1)) e.preventDefault();
+    return;
+  }
+  if (e.key === "ArrowUp") {
+    const container = target.closest("[data-enter-nav]") as HTMLElement | null;
+    if (focusNextInSequence(target, container, -1)) e.preventDefault();
+    return;
+  }
+  if (e.key === "ArrowLeft" && input.selectionStart === 0 && input.selectionEnd === 0) {
+    const container = target.closest("[data-enter-nav]") as HTMLElement | null;
+    if (focusNextInSequence(target, container, -1)) e.preventDefault();
+    return;
+  }
+  if (
+    e.key === "ArrowRight" &&
+    input.selectionStart === input.value.length &&
+    input.selectionEnd === input.value.length
+  ) {
+    const container = target.closest("[data-enter-nav]") as HTMLElement | null;
+    if (focusNextInSequence(target, container, 1)) e.preventDefault();
+    return;
+  }
 }

@@ -137,6 +137,25 @@ ipcMain.handle("print:html", async (_event, payload) => {
 // messages on the shop's behalf.
 // ---------------------------------------------------------------------------
 
+function waitForNextPaint(win, timeoutMs, fallbackImage) {
+  return new Promise((resolve) => {
+    let done = false;
+    const handler = (_e, _dirty, img) => {
+      if (done) return;
+      done = true;
+      try { win.webContents.removeListener("paint", handler); } catch { /* ignore */ }
+      resolve(img);
+    };
+    win.webContents.on("paint", handler);
+    setTimeout(() => {
+      if (done) return;
+      done = true;
+      try { win.webContents.removeListener("paint", handler); } catch { /* ignore */ }
+      resolve(fallbackImage ?? null);
+    }, timeoutMs);
+  });
+}
+
 async function captureHtmlToClipboardImage(html, widthPx) {
   let tmpFile = null;
   let shotWin = null;
@@ -144,42 +163,45 @@ async function captureHtmlToClipboardImage(html, widthPx) {
     tmpFile = path.join(os.tmpdir(), `margin-erp-wa-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
     fs.writeFileSync(tmpFile, html, "utf8");
 
+    // Offscreen rendering (webPreferences.offscreen) is Electron's own
+    // purpose-built mechanism for capturing a page with no visible window
+    // at all — it always paints to an in-memory buffer, regardless of the
+    // window's on-screen visibility. A previous version of this used a
+    // normal window pushed off-screen + capturePage(), which some Windows
+    // GPU/driver combinations never actually composite (so the clipboard
+    // stayed empty); OSR avoids that failure mode entirely.
     shotWin = new BrowserWindow({
-      // A window that is NEVER shown often never gets composited by
-      // Chromium, so capturePage() silently returns a blank/empty image —
-      // that's why the clipboard ended up empty. Placing it far off-screen
-      // and using showInactive() keeps it invisible to the user while still
-      // being "shown" enough to render properly.
       show: false,
-      x: -2000,
-      y: -2000,
       width: widthPx,
-      height: 100,
-      frame: false,
-      skipTaskbar: true,
-      webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false },
+      height: 60,
+      webPreferences: { contextIsolation: true, sandbox: true, offscreen: true },
     });
-    shotWin.showInactive();
+
+    let lastFrame = null;
+    shotWin.webContents.on("paint", (_event, _dirty, image) => {
+      lastFrame = image;
+    });
+    shotWin.webContents.setFrameRate(30);
 
     await shotWin.loadFile(tmpFile);
+    // Let barcodes/images/fonts settle and give OSR its first paint.
+    await waitForNextPaint(shotWin, 800, lastFrame);
 
-    // Let images/barcodes/fonts settle, then size the window to the full
-    // rendered height so the capture isn't cropped.
-    await new Promise((r) => setTimeout(r, 250));
     const contentHeight = await shotWin.webContents.executeJavaScript(
       "Math.ceil(document.documentElement.scrollHeight)",
     );
-    const height = Math.max(100, Math.min(6000, Number(contentHeight) || 600));
-    shotWin.setContentSize(widthPx, height);
-    await new Promise((r) => setTimeout(r, 250));
+    const height = Math.max(60, Math.min(6000, Number(contentHeight) || 600));
+    shotWin.setSize(widthPx, height);
 
-    let image = await shotWin.webContents.capturePage();
-    if (image.isEmpty()) {
-      // Rare case: compositor wasn't ready yet — give it one more chance.
-      await new Promise((r) => setTimeout(r, 400));
-      image = await shotWin.webContents.capturePage();
+    // Resizing triggers new paints at the final size; wait for one, and
+    // force a repaint if nothing usable arrives on its own.
+    let image = await waitForNextPaint(shotWin, 900, null);
+    if ((!image || image.isEmpty() || image.getSize().height < height - 20) && !shotWin.isDestroyed()) {
+      shotWin.webContents.invalidate();
+      image = await waitForNextPaint(shotWin, 900, null);
     }
-    if (image.isEmpty()) return false;
+    if (!image) image = lastFrame;
+    if (!image || image.isEmpty()) return false;
 
     clipboard.writeImage(image);
     return true;
@@ -188,10 +210,7 @@ async function captureHtmlToClipboardImage(html, widthPx) {
   } finally {
     setTimeout(() => {
       try {
-        if (shotWin && !shotWin.isDestroyed()) {
-          shotWin.hide();
-          shotWin.destroy();
-        }
+        if (shotWin && !shotWin.isDestroyed()) shotWin.destroy();
       } catch {
         /* ignore */
       }
@@ -200,7 +219,7 @@ async function captureHtmlToClipboardImage(html, widthPx) {
       } catch {
         /* ignore */
       }
-    }, 1000);
+    }, 800);
   }
 }
 
