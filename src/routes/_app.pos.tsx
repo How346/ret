@@ -200,13 +200,55 @@ function POS() {
   }, [priceFor]);
 
   // When a product has several MRP/price variants, ask which one to bill.
-  const [variantAsk, setVariantAsk] = useState<{ product: Product; qty: number } | null>(null);
+  const [variantAsk, setVariantAsk] = useState<{ product: Product; qty: number; variants?: Variant[] } | null>(null);
 
   const addSmart = useCallback((p: Product, qty: number) => {
     const vs = variantsFor(p.id);
     if (vs.length > 0) { setVariantAsk({ product: p, qty }); return; }
     addToCartQty(p, qty);
   }, [variantsFor, addToCartQty]);
+
+  // Barcode scanners can fire immediately after app start, before the
+  // variants-all query has finished loading.  For a direct product barcode,
+  // always verify the product's variants from the database before billing it.
+  // This guarantees that a product-level barcode opens the MRP picker whenever
+  // multiple MRP/price variants exist, instead of silently adding the base
+  // product.
+  const addScannedProduct = useCallback(async (p: Product, qty: number) => {
+    const localVariants = variantsFor(p.id);
+    if (localVariants.length > 0) {
+      setVariantAsk({ product: p, qty, variants: localVariants });
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("product_variants")
+        .select("id,product_id,label,barcode,mrp,sale_price")
+        .eq("product_id", p.id)
+        .order("created_at");
+
+      if (error) throw error;
+      const freshVariants = (data ?? []) as Variant[];
+
+      // Keep the picker in sync with the freshly fetched variants.  The
+      // variants-all query may have been empty/stale when the scan happened.
+      if (freshVariants.length > 0) {
+        qc.setQueryData(["variants-all"], (current: Variant[] | undefined) => {
+          const existing = current ?? [];
+          const withoutProduct = existing.filter(v => v.product_id !== p.id);
+          return [...withoutProduct, ...freshVariants];
+        });
+        setVariantAsk({ product: p, qty, variants: freshVariants });
+        return;
+      }
+    } catch (err: any) {
+      toast.error(err?.message ?? "Unable to check product price variants");
+      return;
+    }
+
+    addToCartQty(p, qty);
+  }, [variantsFor, qc, addToCartQty]);
 
   const addVariant = (p: Product, v: Variant | null, qty: number) => {
     const price = v ? Number(v.sale_price) : p.sale_price;
@@ -236,7 +278,12 @@ function POS() {
       const rest = mult[2].trim();
       if (!rest) { setSearch(""); return; }
       const p = products.find(pp => pp.barcode?.toLowerCase() === rest.toLowerCase() || pp.sku?.toLowerCase() === rest.toLowerCase());
-      if (p) { addSmart(p, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); }
+      if (p) {
+        const qty = qtyMultiplierRef.current;
+        qtyMultiplierRef.current = 1;
+        setSearch("");
+        void addScannedProduct(p, qty);
+      }
       return;
     }
     const q = raw.toLowerCase();
@@ -250,8 +297,19 @@ function POS() {
       }
     }
     const exact = products.find(p => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q);
-    if (exact) { addSmart(exact, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); return; }
-    if (filtered.length === 1) { addSmart(filtered[0], qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); }
+    if (exact) {
+      const qty = qtyMultiplierRef.current;
+      qtyMultiplierRef.current = 1;
+      setSearch("");
+      void addScannedProduct(exact, qty);
+      return;
+    }
+    if (filtered.length === 1) {
+      const qty = qtyMultiplierRef.current;
+      qtyMultiplierRef.current = 1;
+      setSearch("");
+      void addScannedProduct(filtered[0], qty);
+    }
   };
 
 
@@ -590,7 +648,7 @@ function POS() {
 
       <VariantPickDialog
         ask={variantAsk}
-        variants={variantAsk ? variantsFor(variantAsk.product.id) : []}
+        variants={variantAsk?.variants ?? (variantAsk ? variantsFor(variantAsk.product.id) : [])}
         onClose={() => { setVariantAsk(null); searchRef.current?.focus(); }}
         onPick={(v) => variantAsk && addVariant(variantAsk.product, v, variantAsk.qty)}
       />
