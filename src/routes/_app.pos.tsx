@@ -27,7 +27,7 @@ import { MessageCircle, LayoutGrid } from "lucide-react";
 import { onEnterFocusNext } from "@/lib/keyboard-nav";
 import {
   getActiveLayout, setActiveLayout, listTemplates, saveTemplate, deleteTemplate, applyTemplate,
-  DEFAULT_POS_LAYOUT, type PosLayoutConfig,
+  DEFAULT_POS_LAYOUT, POS_PRESETS, type PosLayoutConfig,
 } from "@/lib/pos-layout";
 
 export const Route = createFileRoute("/_app/pos")({
@@ -448,6 +448,34 @@ function POS() {
 
   useEffect(() => { searchRef.current?.focus(); }, []);
 
+  // One shared scan/search control is rendered either in the existing left
+  // panel (current look) or centered above the full POS workspace by the
+  // Professional preset. This keeps keyboard/scanner behavior identical.
+  const scanSearchControl = (
+    <div className="relative flex items-center gap-1 w-full">
+      <div className="relative flex-1">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          ref={searchRef}
+          placeholder="Scan barcode or search… (F2)"
+          className="pl-9 h-11 font-mono"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.stopPropagation();
+              void onSearchEnter();
+            }
+          }}
+        />
+      </div>
+      <Button type="button" variant="outline" size="sm" className="h-11 text-xs px-2 shrink-0" onClick={() => setPickerOpen(true)} title="All items (Ctrl+I)">
+        <ListIcon className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+
   return (
     <div className="h-[calc(100vh-3rem)] flex flex-col bg-background">
       <div className="flex items-center justify-end px-3 pt-2">
@@ -455,32 +483,16 @@ function POS() {
           <LayoutGrid className="h-3.5 w-3.5 mr-1" /> Customize layout
         </Button>
       </div>
+      {layout.searchPlacement === "center" && (
+        <div className="px-3 pt-1 pb-2 flex justify-center">
+          <div className="w-full max-w-3xl">{scanSearchControl}</div>
+        </div>
+      )}
       <div ref={posContainerRef} className="flex-1 min-h-0 flex gap-0 p-3 pt-1">
       {/* LEFT — search + product grid */}
       <Card className="flex flex-col overflow-hidden" style={{ width: `${layout.colPct[0]}%` }}>
         <div className="p-3 border-b border-border space-y-2">
-          <div className="relative flex items-center gap-1">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                ref={searchRef}
-                placeholder="Scan barcode or search… (F2)"
-                className="pl-9 h-11 font-mono"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    void onSearchEnter();
-                  }
-                }}
-              />
-            </div>
-            <Button type="button" variant="outline" size="sm" className="h-11 text-xs px-2 shrink-0" onClick={() => setPickerOpen(true)} title="All items (Ctrl+I)">
-              <ListIcon className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          {layout.searchPlacement !== "center" && scanSearchControl}
           {layout.sections.priceLevelTabs && (
             <Tabs value={priceLevel} onValueChange={(v) => setPriceLevel(v as PriceLevel)}>
               <TabsList className="grid grid-cols-3 w-full h-8">
@@ -958,11 +970,35 @@ function PosLayoutPanel({
 
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">
-            Drag the thin dividers between the Products / Bill / Summary panels on the page to
-            resize them. Turn sections on or off below, then save the result as a template.
+            Keep the existing layout if you like, drag the thin dividers to resize panels, or use a ready-made preset above. Presets are one-click and do not delete your saved templates.
           </p>
 
           <div className="space-y-2">
+            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Ready-made layouts</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {POS_PRESETS.map((preset) => {
+                const selected =
+                  layout.searchPlacement === preset.config.searchPlacement &&
+                  layout.colPct.every((v, i) => Math.abs(v - preset.config.colPct[i]) < 0.2) &&
+                  layout.sections.productImages === preset.config.sections.productImages;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => { onChange(preset.config); toast.success(`Applied ${preset.name} layout`); }}
+                    className={`rounded-lg border p-3 text-left transition ${selected ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-border hover:border-primary/50 hover:bg-muted/50"}`}
+                  >
+                    <div className="font-semibold text-sm">{preset.name}</div>
+                    <div className="text-[11px] leading-4 text-muted-foreground mt-1">{preset.description}</div>
+                    <div className="mt-2 text-[10px] font-medium text-primary">One-click apply</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2 pt-1">
+            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Current layout options</Label>
             <ToggleRow label="Retail / Wholesale / MRP tabs" checked={layout.sections.priceLevelTabs} onChange={toggle("priceLevelTabs")} />
             <ToggleRow label="Keyboard shortcut hint strip" checked={layout.sections.keypadHints} onChange={toggle("keypadHints")} />
             <ToggleRow label="CGST / SGST breakdown in Summary" checked={layout.sections.gstBreakdown} onChange={toggle("gstBreakdown")} />

@@ -10,6 +10,11 @@ const PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA6f1rsEY8pjbD
 
 const PRODUCT_ID = 'quick-retail-nexus';
 const FILE_NAME = 'licence.lic';
+const CLOCK_STATE_FILE = 'clock-state.json';
+const CLOCK_BACKUP_FILE = 'clock-state.bak';
+const CLOCK_ROLLBACK_TOLERANCE_MS = 2 * 60 * 1000;
+const CLOCK_REG_PATH = 'HKCU\\Software\\MarginERP\\QuickRetailNexus';
+const CLOCK_REG_VALUE = 'LastSeenUtcMs';
 
 function machineGuid() {
   if (process.platform === 'win32') {
@@ -43,6 +48,88 @@ function getHWID() {
 
 function licensePath(app) {
   return path.join(app.getPath('userData'), 'license', FILE_NAME);
+}
+
+function clockStatePaths(app) {
+  const dir = path.join(app.getPath('userData'), 'license');
+  return {
+    dir,
+    primary: path.join(dir, CLOCK_STATE_FILE),
+    backup: path.join(dir, CLOCK_BACKUP_FILE),
+  };
+}
+
+function readClockFile(file) {
+  try {
+    if (!fs.existsSync(file)) return 0;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const value = Number(parsed?.lastSeenUtcMs);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function readWindowsClockCheckpoint() {
+  if (process.platform !== 'win32') return 0;
+  try {
+    const out = execFileSync('reg', [
+      'query', CLOCK_REG_PATH, '/v', CLOCK_REG_VALUE,
+    ], { windowsHide: true, encoding: 'utf8', timeout: 3000 });
+    const m = out.match(new RegExp(CLOCK_REG_VALUE + '\\s+REG_QWORD\\s+(?:0x)?([0-9A-Fa-f]+)', 'i'));
+    if (!m) return 0;
+    const value = parseInt(m[1], 16);
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeClockCheckpoint(app, value) {
+  try {
+    const { dir, primary, backup } = clockStatePaths(app);
+    fs.mkdirSync(dir, { recursive: true });
+    const body = JSON.stringify({ version: 1, lastSeenUtcMs: Math.floor(value) });
+    // Keep two local copies. The registry copy below adds another independent
+    // checkpoint on Windows, making an accidental clock rollback much harder
+    // to bypass by changing/deleting one normal app file.
+    fs.writeFileSync(primary, body + '\n', { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(backup, body + '\n', { encoding: 'utf8', mode: 0o600 });
+  } catch {
+    // A read-only profile should not make an otherwise valid license unusable.
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('reg', [
+        'add', CLOCK_REG_PATH, '/v', CLOCK_REG_VALUE,
+        '/t', 'REG_QWORD', '/d', `0x${Math.floor(value).toString(16)}`, '/f',
+      ], { windowsHide: true, encoding: 'utf8', timeout: 3000, stdio: 'ignore' });
+    } catch {
+      // Registry writes can fail under locked-down Windows profiles.
+    }
+  }
+}
+
+function enforceMonotonicClock(app, nowMs) {
+  if (!app) return;
+
+  const { primary, backup } = clockStatePaths(app);
+  const stored = Math.max(
+    readClockFile(primary),
+    readClockFile(backup),
+    readWindowsClockCheckpoint(),
+  );
+
+  // A normal timezone change does not alter Date.now(). A real rollback of
+  // the computer clock does. Once the app has observed a later UTC timestamp,
+  // going materially backwards cannot be used to extend a license.
+  if (stored > 0 && nowMs + CLOCK_ROLLBACK_TOLERANCE_MS < stored) {
+    const deltaHours = Math.max(1, Math.round((stored - nowMs) / 3600000));
+    throw new Error(`System clock moved backwards by about ${deltaHours} hour(s); license time protection is active`);
+  }
+
+  if (nowMs > stored) writeClockCheckpoint(app, nowMs);
 }
 
 function canonicalPayload(payload) {
@@ -91,7 +178,7 @@ function parseLicenseText(text) {
   return { payload, payloadB64: parts[0], signatureB64: parts[1] };
 }
 
-function verifyLicenseText(text, expectedHWID = getHWID()) {
+function verifyLicenseText(text, expectedHWID = getHWID(), app = null) {
   const parsed = parseLicenseText(text);
   const { payload, signatureB64 } = parsed;
 
@@ -115,6 +202,10 @@ function verifyLicenseText(text, expectedHWID = getHWID()) {
   if (!verified) throw new Error('License signature is invalid');
 
   const now = Date.now();
+  // Enforce a persistent high-water mark before evaluating expiry. This means
+  // setting Windows date/time backwards cannot make an expired license valid
+  // again after the app has already seen a later time.
+  enforceMonotonicClock(app, now);
   if (expires <= now) throw new Error('License has expired');
   if (issued > now + 5 * 60 * 1000) throw new Error('License issue date is in the future');
 
@@ -130,7 +221,7 @@ function readStoredLicense(app) {
   if (!fs.existsSync(file)) return { valid: false, reason: 'none' };
   try {
     const text = fs.readFileSync(file, 'utf8');
-    const result = verifyLicenseText(text);
+    const result = verifyLicenseText(text, getHWID(), app);
     return { ...result, fileName: FILE_NAME };
   } catch (error) {
     return { valid: false, reason: error?.message || 'Invalid license', fileName: FILE_NAME };
@@ -138,7 +229,7 @@ function readStoredLicense(app) {
 }
 
 function installLicense(app, text) {
-  const result = verifyLicenseText(text);
+  const result = verifyLicenseText(text, getHWID(), app);
   const dir = path.dirname(licensePath(app));
   fs.mkdirSync(dir, { recursive: true });
   const tmp = `${licensePath(app)}.tmp-${process.pid}-${Date.now()}`;

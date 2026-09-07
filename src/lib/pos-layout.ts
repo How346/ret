@@ -12,6 +12,9 @@ export type PosLayoutSections = {
 };
 
 export type PosLayoutConfig = {
+  // Where the POS barcode/search control is displayed. The existing "left"
+  // position remains the default so the current POS look is preserved.
+  searchPlacement?: "left" | "center";
   // Width of each of the 3 panels (Products, Cart, Summary) as percentages
   // that add up to 100.
   colPct: [number, number, number];
@@ -19,9 +22,47 @@ export type PosLayoutConfig = {
 };
 
 export const DEFAULT_POS_LAYOUT: PosLayoutConfig = {
+  searchPlacement: "left",
   colPct: [33, 42, 25],
   sections: { priceLevelTabs: true, keypadHints: true, gstBreakdown: true, productImages: true },
 };
+
+export type PosPreset = {
+  id: string;
+  name: string;
+  description: string;
+  config: PosLayoutConfig;
+};
+
+// Built-in presets are read-only. They are added alongside the existing
+// custom layout and saved templates, so the user's current look is never
+// removed or overwritten.
+export const POS_PRESETS: PosPreset[] = [
+  {
+    id: "professional",
+    name: "Professional",
+    description: "Centered scan/search bar with a clean billing workspace.",
+    config: {
+      searchPlacement: "center",
+      colPct: [34, 41, 25],
+      sections: { priceLevelTabs: true, keypadHints: true, gstBreakdown: true, productImages: true },
+    },
+  },
+  {
+    id: "classic-counter",
+    name: "Classic Counter",
+    description: "Fast counter layout with the familiar left-side scan/search area.",
+    config: {
+      searchPlacement: "left",
+      colPct: [33, 42, 25],
+      sections: { priceLevelTabs: true, keypadHints: true, gstBreakdown: true, productImages: false },
+    },
+  },
+];
+
+export function getPosPreset(id: string): PosPreset | null {
+  return POS_PRESETS.find((p) => p.id === id) ?? null;
+}
 
 type Store = {
   active: PosLayoutConfig;
@@ -40,6 +81,7 @@ function clampCols(cols: [number, number, number]): [number, number, number] {
 function normalize(cfg: Partial<PosLayoutConfig> | null | undefined): PosLayoutConfig {
   const base = DEFAULT_POS_LAYOUT;
   return {
+    searchPlacement: cfg?.searchPlacement === "center" ? "center" : base.searchPlacement,
     colPct: cfg?.colPct ? clampCols(cfg.colPct) : base.colPct,
     sections: { ...base.sections, ...(cfg?.sections ?? {}) },
   };
