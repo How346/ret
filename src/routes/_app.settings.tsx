@@ -13,7 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { Printer, Store, Upload, User, Building2, HardDrive, FolderOpen, DownloadCloud, RotateCcw, KeyRound, MessageCircle, Loader2 } from "lucide-react";
+import { Printer, Store, Upload, User, Building2, HardDrive, FolderOpen, DownloadCloud, RotateCcw, KeyRound, MessageCircle, Loader2, Copy, ShieldCheck, ShieldAlert } from "lucide-react";
 import { printReceipt } from "@/lib/print-receipt";
 import {
   isDesktopPrintingAvailable,
@@ -560,8 +560,49 @@ function LicenseTab() {
   const qc = useQC2();
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [hwid, setHwid] = useState("");
+  const [offlineLicense, setOfflineLicense] = useState<any>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const offline = !!window.electronAPI?.getLicenseStatus;
 
-  const activate = async () => {
+  useEffect(() => {
+    if (!offline) return;
+    window.electronAPI!.getHWID().then(r => setHwid(r.hwid)).catch(() => {});
+    window.electronAPI!.getLicenseStatus().then(setOfflineLicense).catch(() => {});
+  }, [offline]);
+
+  const copyHwid = async () => {
+    if (!hwid) return;
+    await navigator.clipboard.writeText(hwid);
+    toast.success("HWID copied");
+  };
+
+  const uploadOfflineLicense = async (file: File) => {
+    if (!window.electronAPI?.installLicense) return;
+    setBusy(true);
+    try {
+      const result = await window.electronAPI.installLicense(await file.text());
+      if (!result.valid) throw new Error(result.reason || "Invalid license");
+      setOfflineLicense(result);
+      await qc.invalidateQueries({ queryKey: ["my-license"] });
+      toast.success("License activated successfully");
+    } catch (e: any) {
+      toast.error(e?.message || "Invalid license file");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeOfflineLicense = async () => {
+    if (!window.electronAPI?.removeLicense) return;
+    if (!confirm("Remove the license from this computer?")) return;
+    await window.electronAPI.removeLicense();
+    setOfflineLicense({ valid: false, reason: "none" });
+    await qc.invalidateQueries({ queryKey: ["my-license"] });
+    toast.success("License removed");
+  };
+
+  const activateOnline = async () => {
     if (!user || !key.trim()) return;
     setBusy(true);
     try {
@@ -572,6 +613,54 @@ function LicenseTab() {
     } catch (e: any) { toast.error(e.message ?? "Invalid key"); }
     finally { setBusy(false); }
   };
+
+  if (offline) {
+    const p = offlineLicense?.payload;
+    const active = !!offlineLicense?.valid && !!p;
+    return (
+      <Card className="p-6 space-y-5">
+        <div>
+          <h2 className="font-semibold flex items-center gap-2"><KeyRound className="h-4 w-4" /> Software license</h2>
+          <p className="text-sm text-muted-foreground mt-1">Offline signed license for this Windows computer.</p>
+        </div>
+
+        <div className="rounded-xl border bg-muted/20 p-4 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <Label className="text-xs uppercase text-muted-foreground">Hardware ID (HWID)</Label>
+            <Button variant="ghost" size="sm" onClick={copyHwid} disabled={!hwid}><Copy className="h-3.5 w-3.5 mr-1" /> Copy</Button>
+          </div>
+          <div className="rounded-lg bg-background border px-3 py-2 font-mono text-xs break-all select-all">{hwid || "Reading hardware ID…"}</div>
+          <p className="text-xs text-muted-foreground">Give this HWID to your administrator. The generated licence.lic must be signed for this exact HWID.</p>
+        </div>
+
+        {active ? (
+          <div className="rounded-xl border p-4 space-y-3">
+            <div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="h-4 w-4" /> License Active</div>
+            <div className="grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+              <Row2 label="License ID" value={<span className="font-mono text-xs">{p.licenseId}</span>} />
+              <Row2 label="Plan" value={p.plan} />
+              <Row2 label="Issued" value={new Date(p.issuedAt).toLocaleDateString()} />
+              <Row2 label="Expires" value={new Date(p.expiresAt).toLocaleDateString()} />
+              <Row2 label="Remaining" value={`${offlineLicense.daysLeft ?? 0} days`} />
+              <Row2 label="Signature" value="Verified locally" />
+            </div>
+            <Button variant="outline" className="text-destructive" onClick={removeOfflineLicense}>Remove License</Button>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold"><ShieldAlert className="h-4 w-4 text-destructive" /> License not active</div>
+            <p className="text-xs text-muted-foreground mt-1">{offlineLicense?.reason && offlineLicense.reason !== "none" ? offlineLicense.reason : "Upload the signed licence.lic file generated for this HWID."}</p>
+          </div>
+        )}
+
+        <input ref={fileRef} type="file" accept=".lic,application/octet-stream,text/plain" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) void uploadOfflineLicense(f); e.currentTarget.value = ""; }} />
+        <Button className="w-full" disabled={busy} onClick={() => fileRef.current?.click()}>
+          <Upload className="h-4 w-4 mr-2" /> {busy ? "Verifying license…" : "Upload licence.lic"}
+        </Button>
+        <p className="text-xs text-muted-foreground">The license is verified locally using the built-in public key. No private key or license file is uploaded.</p>
+      </Card>
+    );
+  }
 
   return (
     <Card className="p-6 space-y-4">
@@ -591,7 +680,7 @@ function LicenseTab() {
         <Label className="text-xs uppercase text-muted-foreground">Enter renewal / new key</Label>
         <div className="flex gap-2">
           <Input placeholder="LMPOS-XXXX-XXXX-XXXX-XXXX" value={key} onChange={e => setKey(e.target.value.toUpperCase())} className="font-mono" />
-          <Button onClick={activate} disabled={busy || !key.trim()}>{busy ? "Activating…" : "Activate"}</Button>
+          <Button onClick={activateOnline} disabled={busy || !key.trim()}>{busy ? "Activating…" : "Activate"}</Button>
         </div>
         <p className="text-xs text-muted-foreground">Ask your admin to generate a key from the Admin Panel → Licenses.</p>
       </div>

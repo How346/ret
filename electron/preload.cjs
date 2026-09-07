@@ -8,6 +8,12 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("electronAPI", {
   isElectron: true,
 
+  // Offline signed-license API. The private signing key is NEVER exposed here.
+  getHWID: () => ipcRenderer.invoke("license:hwid"),
+  getLicenseStatus: () => ipcRenderer.invoke("license:status"),
+  installLicense: (licenseText) => ipcRenderer.invoke("license:install", licenseText),
+  removeLicense: () => ipcRenderer.invoke("license:remove"),
+
   // Returns the list of printers installed on this machine:
   // [{ name, displayName, isDefault, status }]
   listPrinters: () => ipcRenderer.invoke("printers:list"),

@@ -3,23 +3,48 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 
 export type License = {
-  id: string;
-  key: string;
-  user_id: string | null;
+  id?: string;
+  key?: string;
+  user_id?: string | null;
   plan: string;
   issued_at: string;
   expires_at: string;
   status: string;
-  notes: string | null;
+  notes?: string | null;
+  licenseId?: string;
+  hwid?: string;
+  features?: string[];
 };
+
+const isOfflineDesktop = () =>
+  typeof window !== "undefined" && !!window.electronAPI?.getLicenseStatus;
 
 export function useMyLicense() {
   const { user } = useAuth();
   return useQuery({
-    queryKey: ["my-license", user?.id],
-    enabled: !!user?.id,
+    queryKey: ["my-license", user?.id, isOfflineDesktop() ? "offline" : "online"],
+    // Offline licensing is device-based, not account-based.
+    enabled: isOfflineDesktop() || !!user?.id,
     staleTime: 60_000,
     queryFn: async () => {
+      if (isOfflineDesktop()) {
+        const result = await window.electronAPI!.getLicenseStatus();
+        if (!result.valid || !result.payload) return null;
+        return {
+          id: result.payload.licenseId,
+          key: result.payload.licenseId,
+          user_id: null,
+          plan: result.payload.plan,
+          issued_at: result.payload.issuedAt,
+          expires_at: result.payload.expiresAt,
+          status: "active",
+          notes: null,
+          licenseId: result.payload.licenseId,
+          hwid: result.payload.hwid,
+          features: result.payload.features,
+        } as License;
+      }
+
       const { data, error } = await supabase
         .from("licenses")
         .select("*")

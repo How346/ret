@@ -25,6 +25,27 @@ type ElectronPrintAPI = {
     message: string,
     widthPx?: number,
   ) => Promise<{ success: boolean; errorType?: string; imaged?: boolean }>;
+  getHWID: () => Promise<{ hwid: string }>;
+  getLicenseStatus: () => Promise<OfflineLicenseStatus>;
+  installLicense: (licenseText: string) => Promise<OfflineLicenseStatus>;
+  removeLicense: () => Promise<OfflineLicenseStatus>;
+};
+
+export type OfflineLicenseStatus = {
+  valid: boolean;
+  reason?: string;
+  daysLeft?: number;
+  fileName?: string;
+  payload?: {
+    v: number;
+    product: string;
+    licenseId: string;
+    hwid: string;
+    plan: string;
+    issuedAt: string;
+    expiresAt: string;
+    features: string[];
+  };
 };
 
 declare global {

@@ -2,8 +2,24 @@ const { app, BrowserWindow, shell, ipcMain, clipboard } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
+const { getHWID, readStoredLicense, installLicense, removeLicense } = require("./license.cjs");
 
 let mainWindow = null;
+
+// ---------------------------------------------------------------------------
+// Offline signed licensing
+// ---------------------------------------------------------------------------
+
+ipcMain.handle("license:hwid", async () => ({ hwid: getHWID() }));
+ipcMain.handle("license:status", async () => readStoredLicense(app));
+ipcMain.handle("license:install", async (_event, licenseText) => {
+  try {
+    return installLicense(app, String(licenseText || ""));
+  } catch (error) {
+    return { valid: false, reason: error?.message || "Invalid license" };
+  }
+});
+ipcMain.handle("license:remove", async () => removeLicense(app));
 
 function createWindow() {
   const win = new BrowserWindow({

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quick Retail Nexus — License Generator</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#f4f7fb;color:#172033;padding:28px}.wrap{max-width:980px;margin:auto}.card{background:#fff;border:1px solid #e1e7f0;border-radius:22px;box-shadow:0 18px 55px #16213d12;padding:26px}.head{display:flex;align-items:center;gap:14px;margin-bottom:22px}.logo{width:52px;height:52px;border-radius:15px;background:#315efb;color:#fff;display:grid;place-items:center;font-weight:900}.head h1{margin:0;font-size:23px}.muted{color:#718096;font-size:13px}.warning{background:#fff8df;border:1px solid #efd078;border-radius:13px;padding:13px 15px;font-size:13px;line-height:1.55;margin-bottom:22px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.field{display:flex;flex-direction:column;gap:7px}.field.full{grid-column:1/-1}label{font-size:12px;font-weight:750;color:#536176;text-transform:uppercase;letter-spacing:.04em}input,select,textarea{width:100%;border:1px solid #d7dfeb;border-radius:11px;padding:11px 12px;background:#fbfcfe;color:#172033;outline:0}input:focus,select:focus,textarea:focus{border-color:#315efb;box-shadow:0 0 0 3px #315efb15}textarea{min-height:115px;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}.keyrow{display:flex;gap:8px}.keyrow input{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.btn{border:0;border-radius:11px;padding:11px 15px;font-weight:750;cursor:pointer}.primary{background:#315efb;color:#fff}.secondary{background:#edf2ff;color:#315efb}.danger{background:#fff0f0;color:#b42318}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:20px}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.check{display:flex;gap:8px;align-items:center;border:1px solid #e0e6ef;border-radius:10px;padding:10px;font-size:13px}.check input{width:auto}.status{margin-top:18px;border-radius:12px;padding:12px 14px;background:#f1f4f8;font-size:13px}.ok{background:#eaf8ef;color:#176b3a}.out{margin-top:18px;border-top:1px solid #e5e9f0;padding-top:18px}.small{font-size:11px;color:#718096;line-height:1.55}@media(max-width:720px){body{padding:14px}.grid{grid-template-columns:1fr}.field.full{grid-column:auto}.features{grid-template-columns:1fr}.card{padding:19px}}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card">
+<div class="head"><div class="logo">QR</div><div><h1>Quick Retail Nexus</h1><div class="muted">Offline Ed25519 License Generator</div></div></div>
+<div class="warning"><b>🔒 Private-key safety:</b> this page signs licenses locally in your browser. Do not publish your private key or this generator with a private key pre-filled. Prefer opening this file offline. Anyone who gets your private key can create licenses your POS will accept.</div>
+<div class="grid">
+<div class="field full"><label>Private key (PKCS#8 PEM)</label><div class="keyrow"><input id="privateKey" type="password" autocomplete="off" placeholder="Paste private-key.pem here"><button class="btn secondary" id="show">Show</button><button class="btn secondary" id="fileBtn">Import .pem</button><input id="file" type="file" accept=".pem,.key,text/plain" hidden></div><div class="small">The private key is read only in this browser tab and is never sent anywhere by this page.</div></div>
+<div class="field"><label>Customer / Shop</label><input id="customer" placeholder="Sharma General Store"></div>
+<div class="field"><label>HWID</label><input id="hwid" placeholder="7F42-A91C-..." autocomplete="off"></div>
+<div class="field"><label>Plan</label><select id="plan"><option value="standard">Standard</option><option value="professional" selected>Professional</option><option value="enterprise">Enterprise</option></select></div>
+<div class="field"><label>Duration</label><select id="duration"><option value="30">30 days</option><option value="90">90 days</option><option value="365" selected>365 days</option><option value="1825">5 years</option><option value="lifetime">Lifetime</option></select></div>
+<div class="field"><label>License ID</label><input id="licenseId" readonly></div>
+<div class="field"><label>Expires</label><input id="expires" type="date"></div>
+<div class="field full"><label>Features</label><div class="features"><label class="check"><input type="checkbox" value="pos" checked> POS Billing</label><label class="check"><input type="checkbox" value="inventory" checked> Inventory</label><label class="check"><input type="checkbox" value="reports" checked> Reports</label><label class="check"><input type="checkbox" value="printing" checked> Printing</label><label class="check"><input type="checkbox" value="whatsapp" checked> WhatsApp</label><label class="check"><input type="checkbox" value="purchases" checked> Purchases</label></div></div>
+</div>
+<div class="actions"><button class="btn primary" id="generate">Generate licence.lic</button><button class="btn secondary" id="newId">New License ID</button><button class="btn danger" id="clear">Clear</button></div>
+<div id="status" class="status">Ready. Enter your private key, customer HWID and license details.</div>
+<div class="out"><label>Generated license</label><textarea id="output" readonly placeholder="The signed licence.lic contents will appear here..."></textarea><div class="actions"><button class="btn secondary" id="download" disabled>Download licence.lic</button><button class="btn secondary" id="copy" disabled>Copy License</button></div></div>
+</div></div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+let lastLicense='';
+function b64u(buf){return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+function pemToBytes(pem){const b64=String(pem).replace(/-----BEGIN PRIVATE KEY-----/,'').replace(/-----END PRIVATE KEY-----/,'').replace(/\s/g,'');const bin=atob(b64);const out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out.buffer}
+function canonical(p){return JSON.stringify({v:Number(p.v),product:String(p.product),licenseId:String(p.licenseId),hwid:String(p.hwid),plan:String(p.plan),issuedAt:String(p.issuedAt),expiresAt:String(p.expiresAt),features:Array.isArray(p.features)?p.features.map(String):[]})}
+function newId(){const a=new Uint8Array(8);crypto.getRandomValues(a);$('licenseId').value='QRN-'+[...a].map(x=>x.toString(16).padStart(2,'0')).join('').toUpperCase()}
+function isoDateLocal(days){const d=new Date();d.setHours(12,0,0,0);d.setDate(d.getDate()+Number(days));return d.toISOString().slice(0,10)}
+function setStatus(t,ok=false){$('status').textContent=t;$('status').className='status'+(ok?' ok':'')}
+function updateExpiry(){const v=$('duration').value;$('expires').value=v==='lifetime'?'2099-12-31':isoDateLocal(v)}
+$('show').onclick=()=>{$('privateKey').type=$('privateKey').type==='password'?'text':'password';$('show').textContent=$('privateKey').type==='password'?'Show':'Hide'};
+$('fileBtn').onclick=()=>$('file').click();
+$('file').onchange=async e=>{const f=e.target.files?.[0];if(!f)return; $('privateKey').value=await f.text();setStatus('Private key imported locally.');e.target.value=''};
+$('newId').onclick=newId;$('duration').onchange=updateExpiry;
+$('clear').onclick=()=>{$('privateKey').value='';$('customer').value='';$('hwid').value='';$('output').value='';lastLicense='';$('download').disabled=true;$('copy').disabled=true;setStatus('Cleared. Private key removed from this page.')};
+$('generate').onclick=async()=>{
+ try{
+  if(!crypto?.subtle)throw new Error('Web Crypto is unavailable in this browser.');
+  const pem=$('privateKey').value.trim();if(!pem)throw new Error('Private key is required.');
+  if(!pem.includes('BEGIN PRIVATE KEY'))throw new Error('Use a PKCS#8 private-key.pem file.');
+  const hwid=$('hwid').value.trim().toUpperCase();if(!hwid)throw new Error('HWID is required.');
+  if(!/^[A-Z0-9-]{8,128}$/.test(hwid))throw new Error('HWID format looks invalid.');
+  if(!$('licenseId').value)newId();
+  const expires=$('expires').value;if(!expires)throw new Error('Expiry date is required.');
+  const payload={v:1,product:'quick-retail-nexus',licenseId:$('licenseId').value,hwid,plan:$('plan').value,issuedAt:new Date().toISOString(),expiresAt:new Date(expires+'T23:59:59Z').toISOString(),features:[...document.querySelectorAll('.check input:checked')].map(x=>x.value)};
+  const key=await crypto.subtle.importKey('pkcs8',pemToBytes(pem),{name:'Ed25519'},false,['sign']);
+  const data=new TextEncoder().encode(canonical(payload));
+  const sig=await crypto.subtle.sign({name:'Ed25519'},key,data);
+  const body=b64u(new TextEncoder().encode(canonical(payload)))+'.'+b64u(sig);
+  lastLicense='QRN-LIC-V1\n'+body+'\n';
+  $('output').value=lastLicense;$('download').disabled=false;$('copy').disabled=false;
+  setStatus('✓ License generated and signed locally. No network request was made.',true);
+ }catch(e){console.error(e);setStatus('Error: '+(e.message||e))}
+};
+$('download').onclick=()=>{const blob=new Blob([lastLicense],{type:'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='licence.lic';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
+$('copy').onclick=async()=>{await navigator.clipboard.writeText(lastLicense);setStatus('✓ License copied.',true)};
+newId();updateExpiry();
+</script>
+</body>
+</html>
