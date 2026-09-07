@@ -166,13 +166,13 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
   // pre-filled from the product master and only needs a direct click to
   // change. It still has its own ref/cell (via COST_COL below) for that
   // manual click-in case.
-  const COL_ORDER = ["barcode", "hsn", "qty", "mrp", "sale", "gst"] as const;
+  const COL_ORDER = ["barcode", "hsn", "qty", "cost", "mrp", "sale", "gst"] as const;
   const COST_COL = "cost" as const;
   type Col = typeof COL_ORDER[number] | typeof COST_COL;
   const NEXT_COL: Record<Col, Col | null> = {
     barcode: "hsn",
     hsn: "qty",
-    qty: "mrp",
+    qty: "cost",
     cost: "mrp",
     mrp: "sale",
     sale: "gst",
@@ -213,7 +213,6 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
       return;
     }
     if (e.key === "ArrowLeft" && input.selectionStart === 0 && input.selectionEnd === 0) {
-      if (col === COST_COL) return; // cost sits outside the arrow chain — see COL_ORDER comment
       const pos = COL_ORDER.indexOf(col);
       const prev = COL_ORDER[pos - 1];
       if (prev) { e.preventDefault(); focusCell(idx, prev, false); }
@@ -224,7 +223,6 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
       input.selectionStart === input.value.length &&
       input.selectionEnd === input.value.length
     ) {
-      if (col === COST_COL) return;
       const pos = COL_ORDER.indexOf(col);
       const next = COL_ORDER[pos + 1];
       if (next) { e.preventDefault(); focusCell(idx, next, false); }
@@ -426,11 +424,17 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
 
 
         <div className="grid gap-3 sm:grid-cols-4" data-enter-nav onKeyDown={onEnterFocusNext}>
-          <div><Label>Bill No.</Label><Input value={billNo} onChange={(e) => setBillNo(e.target.value)} /></div>
+          <div><Label>Bill No.</Label><Input autoFocus value={billNo} onChange={(e) => setBillNo(e.target.value)} /></div>
           <div><Label>Date</Label><Input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} /></div>
           <div className="sm:col-span-2">
             <Label>Supplier</Label>
-            <Select value={supplierId} onValueChange={setSupplierId}>
+            <Select
+              value={supplierId}
+              onValueChange={(v) => {
+                setSupplierId(v);
+                setTimeout(() => { barcodeRef.current?.focus(); barcodeRef.current?.select(); }, 30);
+              }}
+            >
               <SelectTrigger><SelectValue placeholder="Select supplier" /></SelectTrigger>
               <SelectContent>
                 {suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
@@ -456,7 +460,6 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
             }}
             placeholder="Scan barcode and press Enter, or press Ctrl+I to pick from all items"
             className="mt-1 font-mono"
-            autoFocus
           />
         </div>
 

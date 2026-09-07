@@ -26,8 +26,8 @@ import { sendReceiptOnWhatsApp, fillWhatsAppTemplate, normalizeWhatsAppPhone, op
 import { MessageCircle, LayoutGrid } from "lucide-react";
 import { onEnterFocusNext } from "@/lib/keyboard-nav";
 import {
-  getActiveLayout, setActiveLayout, listTemplates, saveTemplate, deleteTemplate, applyTemplate,
-  DEFAULT_POS_LAYOUT, type PosLayoutConfig,
+  getActiveLayout, setActiveLayout, applyTemplate, POS_LAYOUT_TEMPLATES,
+  DEFAULT_POS_LAYOUT, type PosLayoutConfig, type PosLayoutTemplate,
 } from "@/lib/pos-layout";
 
 export const Route = createFileRoute("/_app/pos")({
@@ -123,7 +123,11 @@ function POS() {
   const { data: variants = [] } = useQuery({
     queryKey: ["variants-all"],
     queryFn: async () => {
-      const { data } = await supabase.from("product_variants").select("id,product_id,label,barcode,mrp,sale_price");
+      const { data, error } = await supabase
+        .from("product_variants")
+        .select("id,product_id,label,barcode,mrp,sale_price")
+        .order("created_at");
+      if (error) throw error;
       return (data ?? []) as Variant[];
     },
   });
@@ -202,9 +206,32 @@ function POS() {
   // When a product has several MRP/price variants, ask which one to bill.
   const [variantAsk, setVariantAsk] = useState<{ product: Product; qty: number } | null>(null);
 
-  const addSmart = useCallback((p: Product, qty: number) => {
-    const vs = variantsFor(p.id);
-    if (vs.length > 0) { setVariantAsk({ product: p, qty }); return; }
+  const addSmart = useCallback(async (p: Product, qty: number) => {
+    let vs = variantsFor(p.id);
+
+    // The all-variants query is asynchronous. A barcode can be scanned before
+    // it finishes loading, so re-check this product directly before silently
+    // adding it. This makes the MRP chooser reliable even immediately after
+    // opening the POS.
+    if (vs.length === 0) {
+      const { data, error } = await supabase
+        .from("product_variants")
+        .select("id,product_id,label,barcode,mrp,sale_price")
+        .eq("product_id", p.id)
+        .order("created_at");
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      vs = (data ?? []) as Variant[];
+    }
+
+    // IMPORTANT: a normal product barcode can represent several MRP/price
+    // variants. Always open the chooser before adding the product.
+    if (vs.length > 0) {
+      setVariantAsk({ product: p, qty });
+      return;
+    }
     addToCartQty(p, qty);
   }, [variantsFor, addToCartQty]);
 
@@ -226,23 +253,60 @@ function POS() {
     searchRef.current?.focus();
   };
 
-  const onSearchEnter = () => {
+  const onSearchEnter = async () => {
     const raw = search.trim();
-    if (!raw) { if (cart.length) setPayOpen(true); return; }
-    // "N*" or "N*CODE" — sets multiplier for next scan
-    const mult = raw.match(/^(\d+)\*(.*)$/);
-    if (mult) {
-      qtyMultiplierRef.current = Math.max(1, parseInt(mult[1], 10) || 1);
-      const rest = mult[2].trim();
-      if (!rest) { setSearch(""); return; }
-      const p = products.find(pp => pp.barcode?.toLowerCase() === rest.toLowerCase() || pp.sku?.toLowerCase() === rest.toLowerCase());
-      if (p) { addSmart(p, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); }
+    if (!raw) {
+      if (cart.length) setPayOpen(true);
       return;
     }
-    const q = raw.toLowerCase();
-    const exact = products.find(p => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q);
-    if (exact) { addSmart(exact, qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); return; }
-    if (filtered.length === 1) { addSmart(filtered[0], qtyMultiplierRef.current); qtyMultiplierRef.current = 1; setSearch(""); }
+
+    const mult = raw.match(/^(\d+)\*(.*)$/);
+    let qty = 1;
+    let code = raw;
+    if (mult) {
+      qty = Math.max(1, parseInt(mult[1], 10) || 1);
+      code = mult[2].trim();
+      if (!code) {
+        qtyMultiplierRef.current = qty;
+        setSearch("");
+        return;
+      }
+    } else {
+      qty = qtyMultiplierRef.current || 1;
+    }
+
+    const q = code.toLowerCase();
+
+    // Variant barcode is authoritative: if the scanner reads a barcode
+    // belonging to one exact MRP variant, bill that exact variant directly.
+    const vHit = variants.find((v) => (v.barcode ?? "").trim().toLowerCase() === q);
+    if (vHit) {
+      const parent = products.find((p) => p.id === vHit.product_id);
+      if (parent) {
+        addVariant(parent, vHit, qty);
+        qtyMultiplierRef.current = 1;
+        setSearch("");
+        return;
+      }
+    }
+
+    // Parent barcode/SKU may have multiple MRP rows. Route through addSmart
+    // so the MRP chooser is opened instead of silently adding a price.
+    const exact = products.find((p) =>
+      p.barcode?.trim().toLowerCase() === q || p.sku?.trim().toLowerCase() === q,
+    );
+    if (exact) {
+      await addSmart(exact, qty);
+      qtyMultiplierRef.current = 1;
+      setSearch("");
+      return;
+    }
+
+    if (filtered.length === 1) {
+      await addSmart(filtered[0], qty);
+      qtyMultiplierRef.current = 1;
+      setSearch("");
+    }
   };
 
 
@@ -327,31 +391,43 @@ function POS() {
 
   return (
     <div className="h-[calc(100vh-3rem)] flex flex-col bg-background">
-      <div className="flex items-center justify-end px-3 pt-2">
-        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setCustomizing(true)}>
-          <LayoutGrid className="h-3.5 w-3.5 mr-1" /> Customize layout
-        </Button>
+      <div className="px-3 pt-2 pb-1">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Point of Sale</div>
+            <div className="font-display font-semibold text-sm">Fast billing workspace</div>
+          </div>
+          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setCustomizing(true)}>
+            <LayoutGrid className="h-3.5 w-3.5 mr-1" /> Layout
+          </Button>
+        </div>
+        <div className="mx-auto w-full max-w-2xl rounded-2xl border border-primary/20 bg-card shadow-sm p-2">
+          <div className="relative flex items-center gap-2">
+            <Search className="absolute left-4 h-5 w-5 text-primary" />
+            <Input
+              ref={searchRef}
+              placeholder="Scan barcode or search product…  (F2)"
+              className="pl-11 pr-28 h-12 border-0 bg-transparent text-base font-mono shadow-none focus-visible:ring-0"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && onSearchEnter()}
+            />
+            <div className="absolute right-2 flex items-center gap-1">
+              <span className="hidden sm:inline-flex text-[10px] rounded-md border px-1.5 py-1 text-muted-foreground">ENTER</span>
+              <Button type="button" variant="outline" size="sm" className="h-9 px-2" onClick={() => setPickerOpen(true)} title="All items (Ctrl+I)">
+                <ListIcon className="h-3.5 w-3.5 mr-1" /> Items
+              </Button>
+            </div>
+          </div>
+        </div>
       </div>
       <div ref={posContainerRef} className="flex-1 min-h-0 flex gap-0 p-3 pt-1">
-      {/* LEFT — search + product grid */}
+      {/* LEFT — product grid */}
       <Card className="flex flex-col overflow-hidden" style={{ width: `${layout.colPct[0]}%` }}>
         <div className="p-3 border-b border-border space-y-2">
-          <div className="relative flex items-center gap-1">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                ref={searchRef}
-                placeholder="Scan barcode or search… (F2)"
-                className="pl-9 h-11 font-mono"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && onSearchEnter()}
-              />
-            </div>
-            <Button type="button" variant="outline" size="sm" className="h-11 text-xs px-2 shrink-0" onClick={() => setPickerOpen(true)} title="All items (Ctrl+I)">
-              <ListIcon className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          {search && (
+            <div className="text-xs text-muted-foreground truncate">Searching: <span className="font-mono text-foreground">{search}</span></div>
+          )}
           {layout.sections.priceLevelTabs && (
             <Tabs value={priceLevel} onValueChange={(v) => setPriceLevel(v as PriceLevel)}>
               <TabsList className="grid grid-cols-3 w-full h-8">
@@ -372,7 +448,7 @@ function POS() {
               {filtered.map(p => (
                 <button
                   key={p.id}
-                  onClick={() => addSmart(p, 1)}
+                  onClick={() => { void addSmart(p, 1); }}
                   className="text-left rounded-lg border border-border bg-card hover:border-primary hover:shadow-sm transition p-2.5 group"
                 >
                   {layout.sections.productImages && p.image_url ? (
@@ -385,7 +461,7 @@ function POS() {
                   <div className="flex items-center justify-between mt-2">
                     <span className="font-display font-bold text-sm">{inr(priceFor(p))}</span>
                     <Badge variant={p.stock <= 0 ? "destructive" : "secondary"} className="text-[10px] h-4 px-1.5">
-                      {num(p.stock, 0)} {p.unit}
+                      {num(p.stock, 0)}
                     </Badge>
                   </div>
                 </button>
@@ -697,7 +773,7 @@ function POS() {
         products={products}
         onClose={() => { setPickerOpen(false); searchRef.current?.focus(); }}
         onPick={(p) => {
-          addSmart(p, qtyMultiplierRef.current || 1);
+          void addSmart(p, qtyMultiplierRef.current || 1);
           qtyMultiplierRef.current = 1;
           setPickerOpen(false);
           searchRef.current?.focus();
@@ -814,87 +890,66 @@ function PosLayoutPanel({
   onClose: () => void;
   onChange: (l: PosLayoutConfig) => void;
 }) {
-  const [templates, setTemplates] = useState(() => listTemplates());
-  const [newName, setNewName] = useState("");
-  useEffect(() => { if (open) setTemplates(listTemplates()); }, [open]);
-
-  const toggle = (key: keyof PosLayoutConfig["sections"]) => (v: boolean) => {
-    onChange({ ...layout, sections: { ...layout.sections, [key]: v } });
+  const choose = (template: PosLayoutTemplate) => {
+    const cfg = applyTemplate(template.name) ?? template.config;
+    onChange(cfg);
+    toast.success(`${template.name} layout applied`);
   };
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle className="flex items-center gap-2"><LayoutGrid className="h-4 w-4" /> Customize POS layout</DialogTitle></DialogHeader>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <LayoutGrid className="h-4 w-4" /> Customize POS layout
+          </DialogTitle>
+        </DialogHeader>
 
-        <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">
-            Drag the thin dividers between the Products / Bill / Summary panels on the page to
-            resize them. Turn sections on or off below, then save the result as a template.
-          </p>
-
-          <div className="space-y-2">
-            <ToggleRow label="Retail / Wholesale / MRP tabs" checked={layout.sections.priceLevelTabs} onChange={toggle("priceLevelTabs")} />
-            <ToggleRow label="Keyboard shortcut hint strip" checked={layout.sections.keypadHints} onChange={toggle("keypadHints")} />
-            <ToggleRow label="CGST / SGST breakdown in Summary" checked={layout.sections.gstBreakdown} onChange={toggle("gstBreakdown")} />
-            <ToggleRow label="Product photos in the grid" checked={layout.sections.productImages} onChange={toggle("productImages")} />
-          </div>
-
-          <div className="pt-3 border-t border-border space-y-2">
-            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Save as template</Label>
-            <div className="flex gap-2">
-              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Counter 1" />
-              <Button
-                variant="outline"
-                disabled={!newName.trim()}
-                onClick={() => {
-                  saveTemplate(newName.trim(), layout);
-                  setTemplates(listTemplates());
-                  setNewName("");
-                  toast.success(`Saved template "${newName.trim()}"`);
-                }}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-
-          {templates.length > 0 && (
-            <div className="space-y-1.5">
-              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Saved templates</Label>
-              {templates.map((t) => (
-                <div key={t.name} className="flex items-center justify-between gap-2 rounded-md border border-border px-3 h-9">
-                  <span className="text-sm truncate">{t.name}</span>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button
-                      size="sm" variant="ghost" className="h-7 text-xs"
-                      onClick={() => {
-                        const cfg = applyTemplate(t.name);
-                        if (cfg) { onChange(cfg); toast.success(`Applied "${t.name}"`); }
-                      }}
-                    >
-                      Apply
-                    </Button>
-                    <Button
-                      size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:bg-destructive/10"
-                      onClick={() => { deleteTemplate(t.name); setTemplates(listTemplates()); }}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+        <div className="space-y-4">
+          <div>
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground mb-2">Choose a template</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {POS_LAYOUT_TEMPLATES.map((template) => (
+                <button
+                  key={template.id}
+                  type="button"
+                  onClick={() => choose(template)}
+                  className="group rounded-xl border border-border p-3 text-left hover:border-primary hover:bg-primary/[0.03] transition-all"
+                >
+                  <div className="h-20 rounded-lg bg-muted/50 border mb-3 p-2 flex flex-col gap-1.5">
+                    <div className="mx-auto w-3/5 h-3 rounded-full bg-background border shadow-sm" />
+                    <div className="grid grid-cols-[1.1fr_1.5fr_.7fr] gap-1 flex-1">
+                      <div className="rounded bg-background border" />
+                      <div className="rounded bg-background border" />
+                      <div className="rounded bg-background border" />
+                    </div>
                   </div>
-                </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-display font-semibold text-sm">{template.name}</span>
+                    <Badge variant="secondary" className="text-[10px]">Select</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{template.description}</p>
+                </button>
               ))}
             </div>
-          )}
+          </div>
+
+          <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+            The barcode/search field is intentionally centred above the billing workspace in both templates for fast scanner access.
+            You can still drag the two panel dividers on the POS screen if you need a different width balance.
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Optional sections</div>
+            <ToggleRow label="Retail / Wholesale / MRP tabs" checked={layout.sections.priceLevelTabs} onChange={(v) => onChange({ ...layout, sections: { ...layout.sections, priceLevelTabs: v } })} />
+            <ToggleRow label="Keyboard shortcut hint strip" checked={layout.sections.keypadHints} onChange={(v) => onChange({ ...layout, sections: { ...layout.sections, keypadHints: v } })} />
+            <ToggleRow label="CGST / SGST breakdown in Summary" checked={layout.sections.gstBreakdown} onChange={(v) => onChange({ ...layout, sections: { ...layout.sections, gstBreakdown: v } })} />
+            <ToggleRow label="Product photos in the grid" checked={layout.sections.productImages} onChange={(v) => onChange({ ...layout, sections: { ...layout.sections, productImages: v } })} />
+          </div>
         </div>
 
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onChange(DEFAULT_POS_LAYOUT)}
-          >
-            Reset to default
-          </Button>
+          <Button variant="outline" onClick={() => onChange(DEFAULT_POS_LAYOUT)}>Reset to Counter Pro</Button>
           <Button onClick={onClose}>Done</Button>
         </DialogFooter>
       </DialogContent>
@@ -1249,36 +1304,56 @@ function VariantPickDialog({
   onClose: () => void;
   onPick: (v: Variant | null) => void;
 }) {
+  // Fully keyboard driven: Up/Down highlight, Enter bills the highlighted
+  // price, 1-9 pick a row straight away, Esc cancels.
+  const sortedVariants = useMemo(
+    () => [...variants].sort((a, b) => Number(a.mrp) - Number(b.mrp)),
+    [variants],
+  );
+  const options: (Variant | null)[] = [null, ...sortedVariants];
+  const [sel, setSel] = useState(0);
+  useEffect(() => { if (ask) setSel(0); }, [ask]);
+
   return (
     <Dialog open={!!ask} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md">
+      <DialogContent
+        className="max-w-md"
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") { e.preventDefault(); setSel((i) => Math.min(options.length - 1, i + 1)); return; }
+          if (e.key === "ArrowUp") { e.preventDefault(); setSel((i) => Math.max(0, i - 1)); return; }
+          if (e.key === "Enter") { e.preventDefault(); onPick(options[sel] ?? null); return; }
+          if (/^[1-9]$/.test(e.key)) {
+            const i = Number(e.key) - 1;
+            if (i < options.length) { e.preventDefault(); onPick(options[i] ?? null); }
+          }
+        }}
+      >
         <DialogHeader>
-          <DialogTitle>Select price — {ask?.product.name}</DialogTitle>
+          <DialogTitle>Select MRP / price — {ask?.product.name}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-2">
-          <button
-            className="w-full rounded-md border border-border p-3 text-left hover:bg-muted"
-            onClick={() => onPick(null)}
-          >
-            <div className="font-medium">Default</div>
-            <div className="text-xs text-muted-foreground tabular-nums">
-              MRP {inr(ask?.product.mrp ?? 0)} · Price {inr(ask?.product.sale_price ?? 0)}
-            </div>
-          </button>
-          {variants.map((v) => (
+        <div className="space-y-2" tabIndex={-1}>
+          {options.map((v, i) => (
             <button
-              key={v.id}
-              className="w-full rounded-md border border-border p-3 text-left hover:bg-muted"
+              key={v?.id ?? "default"}
+              autoFocus={i === 0}
+              onMouseEnter={() => setSel(i)}
+              className={`w-full rounded-md border p-3 text-left transition ${
+                sel === i ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-border hover:bg-muted"
+              }`}
               onClick={() => onPick(v)}
             >
-              <div className="font-medium">{v.label || v.barcode || "Variant"}</div>
-              <div className="text-xs text-muted-foreground tabular-nums">
-                MRP {inr(v.mrp)} · Price {inr(v.sale_price)}
+              <div className="font-medium flex items-center gap-2">
+                <span className="kbd">{i + 1}</span>
+                {v ? (v.label || v.barcode || "Variant") : "Default"}
+              </div>
+              <div className="text-xs text-muted-foreground tabular-nums mt-0.5">
+                MRP {inr(v ? v.mrp : ask?.product.mrp ?? 0)} · Price {inr(v ? v.sale_price : ask?.product.sale_price ?? 0)}
               </div>
             </button>
           ))}
         </div>
         <DialogFooter>
+          <span className="text-xs text-muted-foreground mr-auto">↑↓ choose · Enter bill · 1-9 quick pick</span>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
         </DialogFooter>
       </DialogContent>

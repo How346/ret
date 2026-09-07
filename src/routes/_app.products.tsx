@@ -349,6 +349,8 @@ function ProductForm({ value, onChange, categories }: {
 }) {
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const hsnRef = useRef<HTMLInputElement>(null);
+  const uploadBtnRef = useRef<HTMLButtonElement>(null);
   const set = (k: keyof Product, v: any) => onChange({ ...value, [k]: v });
 
   return (
@@ -363,7 +365,14 @@ function ProductForm({ value, onChange, categories }: {
       </div>
       <div>
         <Label>Category</Label>
-        <Select value={value.category_id ?? "_none"} onValueChange={v => set("category_id", v === "_none" ? null : v)}>
+        <Select
+          value={value.category_id ?? "_none"}
+          onValueChange={v => {
+            set("category_id", v === "_none" ? null : v);
+            // Keep the Enter-driven flow going: jump to HSN after choosing.
+            setTimeout(() => { hsnRef.current?.focus(); hsnRef.current?.select(); }, 30);
+          }}
+        >
           <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="_none">— None —</SelectItem>
@@ -371,7 +380,7 @@ function ProductForm({ value, onChange, categories }: {
           </SelectContent>
         </Select>
       </div>
-      <div><Label>HSN code</Label><Input value={value.hsn_code ?? ""} onChange={e => set("hsn_code", e.target.value)} /></div>
+      <div><Label>HSN code</Label><Input ref={hsnRef} value={value.hsn_code ?? ""} onChange={e => set("hsn_code", e.target.value)} /></div>
       <div><Label>Unit</Label><Input value={value.unit ?? "PCS"} onChange={e => set("unit", e.target.value)} /></div>
       <div><Label>MRP</Label><Input type="number" value={value.mrp ?? 0} onChange={e => set("mrp", Number(e.target.value))} /></div>
       <div><Label>Sale price</Label><Input type="number" value={value.sale_price ?? 0} onChange={e => set("sale_price", Number(e.target.value))} /></div>
@@ -388,7 +397,13 @@ function ProductForm({ value, onChange, categories }: {
           ) : (
             <div className="h-14 w-14 rounded border grid place-items-center text-muted-foreground"><ImageIcon className="h-5 w-5" /></div>
           )}
-          <Input className="flex-1" placeholder="https://…" value={value.image_url ?? ""} onChange={e => set("image_url", e.target.value)} />
+          <Input
+            className="flex-1"
+            placeholder="https://…"
+            value={value.image_url ?? ""}
+            onChange={e => set("image_url", e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); uploadBtnRef.current?.focus(); } }}
+          />
           <input ref={fileRef} type="file" accept="image/*" hidden onChange={async e => {
             const f = e.target.files?.[0]; e.target.value = "";
             if (!f) return;
@@ -401,7 +416,7 @@ function ProductForm({ value, onChange, categories }: {
             setUploading(false);
             toast.success("Image uploaded");
           }} />
-          <Button type="button" variant="outline" disabled={uploading} onClick={() => fileRef.current?.click()}>
+          <Button ref={uploadBtnRef} type="button" variant="outline" disabled={uploading} onClick={() => fileRef.current?.click()}>
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
           </Button>
         </div>

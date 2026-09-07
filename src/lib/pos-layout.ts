@@ -1,27 +1,47 @@
-// Lets the cashier/owner customize the POS screen — hide/show parts of it,
-// resize the three panels (Products / Cart / Summary), and save the result
-// as a named template to switch between later. Stored in localStorage since
-// this is a per-device preference (like the printer settings), not a shop
-// policy that should sync to every till.
+// POS layout presets are intentionally limited to two polished, cashier-friendly
+// templates. The active selection is stored per device in localStorage.
 
 export type PosLayoutSections = {
-  priceLevelTabs: boolean; // the Retail / Wholesale / MRP tab bar
-  keypadHints: boolean; // the "F2 search · Ctrl+I all items · ..." hint strip
-  gstBreakdown: boolean; // Subtotal / CGST / SGST rows in the Summary panel
-  productImages: boolean; // product photos in the product grid
+  priceLevelTabs: boolean;
+  keypadHints: boolean;
+  gstBreakdown: boolean;
+  productImages: boolean;
 };
 
 export type PosLayoutConfig = {
-  // Width of each of the 3 panels (Products, Cart, Summary) as percentages
-  // that add up to 100.
   colPct: [number, number, number];
   sections: PosLayoutSections;
 };
 
-export const DEFAULT_POS_LAYOUT: PosLayoutConfig = {
-  colPct: [33, 42, 25],
-  sections: { priceLevelTabs: true, keypadHints: true, gstBreakdown: true, productImages: true },
+export type PosLayoutTemplate = {
+  id: "counter-pro" | "modern-pro";
+  name: string;
+  description: string;
+  config: PosLayoutConfig;
 };
+
+export const POS_LAYOUT_TEMPLATES: PosLayoutTemplate[] = [
+  {
+    id: "counter-pro",
+    name: "Counter Pro",
+    description: "Fast billing layout with a large centred scan/search bar and compact product cards.",
+    config: {
+      colPct: [34, 43, 23],
+      sections: { priceLevelTabs: true, keypadHints: true, gstBreakdown: true, productImages: false },
+    },
+  },
+  {
+    id: "modern-pro",
+    name: "Modern Pro",
+    description: "Premium visual layout with a centred scan/search bar and image-rich product grid.",
+    config: {
+      colPct: [38, 42, 20],
+      sections: { priceLevelTabs: true, keypadHints: false, gstBreakdown: true, productImages: true },
+    },
+  },
+];
+
+export const DEFAULT_POS_LAYOUT: PosLayoutConfig = POS_LAYOUT_TEMPLATES[0].config;
 
 type Store = {
   active: PosLayoutConfig;
@@ -61,11 +81,7 @@ function read(): Store {
 }
 
 function write(s: Store) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(s));
-  } catch {
-    /* ignore — private mode / storage unavailable */
-  }
+  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* storage unavailable */ }
 }
 
 export function getActiveLayout(): PosLayoutConfig {
@@ -78,9 +94,10 @@ export function setActiveLayout(cfg: PosLayoutConfig) {
   write(s);
 }
 
+// Kept for compatibility with older saved layouts. Built-in templates are the
+// only templates exposed by the POS UI now.
 export function listTemplates(): { name: string; config: PosLayoutConfig }[] {
-  const s = read();
-  return Object.entries(s.templates)
+  return Object.entries(read().templates)
     .map(([name, config]) => ({ name, config }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -100,10 +117,12 @@ export function deleteTemplate(name: string) {
 }
 
 export function applyTemplate(name: string): PosLayoutConfig | null {
-  const s = read();
-  const cfg = s.templates[name];
+  const builtIn = POS_LAYOUT_TEMPLATES.find((t) => t.name === name);
+  const cfg = builtIn?.config ?? read().templates[name];
   if (!cfg) return null;
-  s.active = cfg;
+  const normalized = normalize(cfg);
+  const s = read();
+  s.active = normalized;
   write(s);
-  return cfg;
+  return normalized;
 }
