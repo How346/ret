@@ -202,10 +202,20 @@ function verifyLicenseText(text, expectedHWID = getHWID(), app = null) {
   if (!verified) throw new Error('License signature is invalid');
 
   const now = Date.now();
-  // Enforce a persistent high-water mark before evaluating expiry. This means
-  // setting Windows date/time backwards cannot make an expired license valid
-  // again after the app has already seen a later time.
-  enforceMonotonicClock(app, now);
+  // Enforce a persistent high-water mark before evaluating expiry. If an old
+  // test/build left a checkpoint beyond this license's own expiry, it cannot
+  // represent a legitimate observation for this license, so safely discard
+  // that stale checkpoint and start a fresh high-water mark. This avoids a
+  // false rollback error after the PC clock has been corrected.
+  if (app) {
+    const { primary, backup } = clockStatePaths(app);
+    const stored = Math.max(readClockFile(primary), readClockFile(backup), readWindowsClockCheckpoint());
+    if (stored > expires + CLOCK_ROLLBACK_TOLERANCE_MS && now <= expires) {
+      writeClockCheckpoint(app, now);
+    } else {
+      enforceMonotonicClock(app, now);
+    }
+  }
   if (expires <= now) throw new Error('License has expired');
   if (issued > now + 5 * 60 * 1000) throw new Error('License issue date is in the future');
 

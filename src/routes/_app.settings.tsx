@@ -28,6 +28,7 @@ import { openWhatsAppWeb } from "@/lib/whatsapp-send";
 import { backupSupported, pickBackupFolder, getSavedFolder, forgetFolder, runBackup, restoreBackup } from "@/lib/local-backup";
 import { useMyLicense, licenseStatus, redeemLicenseKey } from "@/hooks/use-license";
 import { useQueryClient as useQC2 } from "@tanstack/react-query";
+import { getFontScale, setFontScale } from "@/lib/ui-preferences";
 
 
 
@@ -43,6 +44,7 @@ function Settings() {
   const [printerPrefs, setPrinterPrefs] = useState(getPrinterPrefs());
   const [waConnecting, setWaConnecting] = useState(false);
   const desktopPrinting = isDesktopPrintingAvailable();
+  const [fontScale, setFontScaleState] = useState(() => getFontScale());
 
   useEffect(() => { if (settings) setForm({ ...settings }); }, [settings]);
   useEffect(() => {
@@ -100,6 +102,7 @@ function Settings() {
 
       <Tabs defaultValue="shop">
         <TabsList>
+          <TabsTrigger value="appearance"><span className="mr-1">Aa</span> Appearance</TabsTrigger>
           <TabsTrigger value="shop"><Store className="h-3.5 w-3.5 mr-1" /> Shop</TabsTrigger>
           <TabsTrigger value="print"><Printer className="h-3.5 w-3.5 mr-1" /> Printing</TabsTrigger>
           <TabsTrigger value="whatsapp"><MessageCircle className="h-3.5 w-3.5 mr-1" /> WhatsApp</TabsTrigger>
@@ -110,6 +113,34 @@ function Settings() {
         </TabsList>
 
 
+
+        <TabsContent value="appearance" className="mt-4">
+          <Card className="p-6 space-y-5">
+            <div>
+              <h2 className="font-semibold">Overall text size</h2>
+              <p className="text-sm text-muted-foreground mt-1">Adjust the interface text and rem-based UI sizes across the whole software. This does not change printed receipt font size.</p>
+            </div>
+            <div className="rounded-xl border border-border p-4 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="font-medium">Application font size</div>
+                  <div className="text-sm text-muted-foreground">{Math.round(fontScale * 100)}% of normal</div>
+                </div>
+                <div className="text-2xl font-semibold">Aa</div>
+              </div>
+              <input
+                type="range" min="85" max="120" step="5" value={Math.round(fontScale * 100)}
+                className="w-full accent-primary"
+                onChange={e => { const v = setFontScale(Number(e.target.value) / 100); setFontScaleState(v); }}
+              />
+              <div className="flex justify-between text-xs text-muted-foreground"><span>85% Smaller</span><span>100% Default</span><span>120% Larger</span></div>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3 text-sm">
+              Changes apply immediately to navigation, POS, forms, tables, dialogs and other interface elements. Your existing POS layout is not changed.
+            </div>
+            <Button variant="outline" onClick={() => { const v = setFontScale(1); setFontScaleState(v); toast.success("Font size reset to 100%"); }}>Reset to 100%</Button>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="shop" className="mt-4">
           <Card className="p-6 grid md:grid-cols-2 gap-4">

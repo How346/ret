@@ -6,6 +6,9 @@ import { RouterProvider, createRouter, createMemoryHistory } from "@tanstack/rea
 import { QueryClient } from "@tanstack/react-query";
 import { routeTree } from "./routeTree.gen";
 import "./styles.css";
+import { applyStoredFontScale } from "@/lib/ui-preferences";
+
+applyStoredFontScale();
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },

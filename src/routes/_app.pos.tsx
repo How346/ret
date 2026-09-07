@@ -514,17 +514,17 @@ function POS() {
                 <button
                   key={p.id}
                   onClick={() => addSmart(p, 1)}
-                  className="text-left rounded-lg border border-border bg-card hover:border-primary hover:shadow-sm transition p-2.5 group"
+                  className="text-left rounded-lg border border-border bg-card hover:border-primary hover:shadow-sm transition p-2 group min-w-0"
                 >
                   {layout.sections.productImages && p.image_url ? (
-                    <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-20 object-cover rounded mb-1.5" />
+                    <img src={p.image_url} alt={p.name} loading="lazy" className="w-full aspect-[4/3] max-h-20 object-cover rounded mb-1.5" />
                   ) : null}
-                  <div className="font-medium text-sm leading-tight truncate">{p.name}</div>
-                  <div className="text-[11px] text-muted-foreground mt-0.5 font-mono truncate">
+                  <div className="font-medium text-xs sm:text-sm leading-tight truncate">{p.name}</div>
+                  <div className="text-[10px] sm:text-[11px] text-muted-foreground mt-0.5 font-mono truncate">
                     {p.sku ?? p.barcode ?? "—"}
                   </div>
                   <div className="flex items-center justify-between mt-2">
-                    <span className="font-display font-bold text-sm">{inr(priceFor(p))}</span>
+                    <span className="font-display font-bold text-xs sm:text-sm truncate">{inr(priceFor(p))}</span>
                     <Badge variant={p.stock <= 0 ? "destructive" : "secondary"} className="text-[10px] h-4 px-1.5">
                       {num(p.stock, 0)}
                     </Badge>

@@ -45,6 +45,7 @@
 }
 
 :root {
+  --app-font-scale: 1;
   --radius: 0.5rem;
   --background: oklch(0.985 0.005 250);
   --foreground: oklch(0.18 0.03 260);
@@ -115,6 +116,7 @@
 
 @layer base {
   * { border-color: var(--color-border); }
+  html { font-size: calc(16px * var(--app-font-scale)); }
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);

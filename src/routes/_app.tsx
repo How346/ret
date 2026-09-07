@@ -4,6 +4,8 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { LicenseGate } from "@/components/license-gate";
+import { useEffect } from "react";
+import { applyStoredFontScale } from "@/lib/ui-preferences";
 
 export const Route = createFileRoute("/_app")({
   component: AppLayout,
@@ -11,6 +13,12 @@ export const Route = createFileRoute("/_app")({
 
 function AppLayout() {
   const { session, loading } = useAuth();
+  useEffect(() => {
+    applyStoredFontScale();
+    const onScale = () => applyStoredFontScale();
+    window.addEventListener("margin-erp:font-scale", onScale);
+    return () => window.removeEventListener("margin-erp:font-scale", onScale);
+  }, []);
   if (loading) {
     return (
       <div className="min-h-screen grid place-items-center bg-background text-muted-foreground">
