@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Plus, Pencil, Trash2, Truck } from "lucide-react";
 import { toast } from "sonner";
 import { inr } from "@/lib/format";
+import { onEnterFocusNext } from "@/lib/keyboard-nav";
 
 type Supplier = {
   id: string;
@@ -146,7 +147,7 @@ function SupplierDialog({ editing, onSave }: { editing: Supplier | null; onSave:
   return (
     <DialogContent className="max-w-lg">
       <DialogHeader><DialogTitle>{editing ? "Edit Supplier" : "New Supplier"}</DialogTitle></DialogHeader>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2" data-enter-nav onKeyDown={onEnterFocusNext}>
         <div className="sm:col-span-2"><Label>Name *</Label><Input value={form.name ?? ""} onChange={(e) => upd("name", e.target.value)} /></div>
         <div><Label>Phone</Label><Input value={form.phone ?? ""} onChange={(e) => upd("phone", e.target.value)} /></div>
         <div><Label>Email</Label><Input value={form.email ?? ""} onChange={(e) => upd("email", e.target.value)} /></div>
@@ -154,10 +155,10 @@ function SupplierDialog({ editing, onSave }: { editing: Supplier | null; onSave:
         <div><Label>State</Label><Input value={form.state ?? ""} onChange={(e) => upd("state", e.target.value)} /></div>
         <div className="sm:col-span-2"><Label>Address</Label><Input value={form.address ?? ""} onChange={(e) => upd("address", e.target.value)} /></div>
         <div><Label>Opening Balance</Label><Input type="number" value={form.balance ?? 0} onChange={(e) => upd("balance", Number(e.target.value))} /></div>
+        <DialogFooter className="sm:col-span-2">
+          <Button onClick={() => { if (!form.name) return; onSave(form); }}>Save</Button>
+        </DialogFooter>
       </div>
-      <DialogFooter>
-        <Button onClick={() => { if (!form.name) return; onSave(form); }}>Save</Button>
-      </DialogFooter>
     </DialogContent>
   );
 }

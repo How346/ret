@@ -82,7 +82,12 @@ function CategoriesPage() {
           <DialogContent className="max-w-sm">
             <DialogHeader><DialogTitle>{editing?.id ? "Edit" : "New"} category</DialogTitle></DialogHeader>
             <Label>Name</Label>
-            <Input autoFocus value={editing?.name ?? ""} onChange={e => setEditing(c => ({ ...(c ?? {}), name: e.target.value }))} />
+            <Input
+              autoFocus
+              value={editing?.name ?? ""}
+              onChange={e => setEditing(c => ({ ...(c ?? {}), name: e.target.value }))}
+              onKeyDown={(e) => { if (e.key === "Enter" && !save.isPending) { e.preventDefault(); save.mutate(); } }}
+            />
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
               <Button onClick={() => save.mutate()} disabled={save.isPending}>Save</Button>

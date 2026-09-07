@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Search, Trash2, Plus, Minus, Pause, ListRestart, Printer, Banknote,
   CreditCard, Smartphone, Percent, ShoppingCart, X, UserPlus, Loader2,
+  List as ListIcon,
 } from "lucide-react";
 import { inr, num } from "@/lib/format";
 import { toast } from "sonner";
@@ -22,7 +23,12 @@ import { Badge } from "@/components/ui/badge";
 import { useStoreSettings } from "@/hooks/use-store-settings";
 import { printReceipt, buildReceiptHtml } from "@/lib/print-receipt";
 import { sendReceiptOnWhatsApp, fillWhatsAppTemplate, normalizeWhatsAppPhone, openWhatsAppWeb } from "@/lib/whatsapp-send";
-import { MessageCircle } from "lucide-react";
+import { MessageCircle, LayoutGrid } from "lucide-react";
+import { onEnterFocusNext } from "@/lib/keyboard-nav";
+import {
+  getActiveLayout, setActiveLayout, listTemplates, saveTemplate, deleteTemplate, applyTemplate,
+  DEFAULT_POS_LAYOUT, type PosLayoutConfig,
+} from "@/lib/pos-layout";
 
 export const Route = createFileRoute("/_app/pos")({
   component: POS,
@@ -57,6 +63,41 @@ function POS() {
   const [priceLevel, setPriceLevel] = useState<PriceLevel>("sale");
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [payOpen, setPayOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [layout, setLayout] = useState<PosLayoutConfig>(() => getActiveLayout());
+  const [customizing, setCustomizing] = useState(false);
+  useEffect(() => { setActiveLayout(layout); }, [layout]);
+  const posContainerRef = useRef<HTMLDivElement>(null);
+
+  // Drag a divider between panels 0/1/2 (Products | Cart | Summary) to
+  // resize them, redistributing the width between just the two panels on
+  // either side of that divider.
+  const startResize = (dividerIdx: 0 | 1) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = posContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const startX = e.clientX;
+    const startCols: [number, number, number] = [...layout.colPct];
+    const onMove = (ev: MouseEvent) => {
+      const deltaPct = ((ev.clientX - startX) / rect.width) * 100;
+      const a = dividerIdx, b = dividerIdx + 1;
+      const minPct = 12;
+      let next: [number, number, number] = [...startCols];
+      const total = startCols[a] + startCols[b];
+      let newA = startCols[a] + deltaPct;
+      newA = Math.max(minPct, Math.min(total - minPct, newA));
+      next[a] = Math.round(newA * 10) / 10;
+      next[b] = Math.round((total - newA) * 10) / 10;
+      setLayout((l) => ({ ...l, colPct: next }));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
   const [waAsk, setWaAsk] = useState<{
     phone: string;
     html: string;
@@ -272,6 +313,7 @@ function POS() {
       else if (e.key === "F5") { e.preventDefault(); holdBill(); }
       else if (e.key === "F6") { e.preventDefault(); const el = document.getElementById("recall-btn"); (el as HTMLElement)?.click(); }
       else if (e.key === "F8") { e.preventDefault(); window.print(); }
+      else if ((e.ctrlKey || e.metaKey) && (e.key === "i" || e.key === "I")) { e.preventDefault(); setPickerOpen(true); }
       else if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); if (cart.length) setPayOpen(true); }
       else if (e.key === "Escape" && !payOpen && !inField) { e.preventDefault(); clearBill(); }
       else if (e.key === "Escape" && payOpen) setPayOpen(false);
@@ -284,28 +326,41 @@ function POS() {
   useEffect(() => { searchRef.current?.focus(); }, []);
 
   return (
-    <div className="h-[calc(100vh-3rem)] grid grid-cols-12 gap-3 p-3 bg-background">
+    <div className="h-[calc(100vh-3rem)] flex flex-col bg-background">
+      <div className="flex items-center justify-end px-3 pt-2">
+        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setCustomizing(true)}>
+          <LayoutGrid className="h-3.5 w-3.5 mr-1" /> Customize layout
+        </Button>
+      </div>
+      <div ref={posContainerRef} className="flex-1 min-h-0 flex gap-0 p-3 pt-1">
       {/* LEFT — search + product grid */}
-      <Card className="col-span-4 flex flex-col overflow-hidden">
+      <Card className="flex flex-col overflow-hidden" style={{ width: `${layout.colPct[0]}%` }}>
         <div className="p-3 border-b border-border space-y-2">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              ref={searchRef}
-              placeholder="Scan barcode or search… (F2)"
-              className="pl-9 h-11 font-mono"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && onSearchEnter()}
-            />
+          <div className="relative flex items-center gap-1">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                ref={searchRef}
+                placeholder="Scan barcode or search… (F2)"
+                className="pl-9 h-11 font-mono"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && onSearchEnter()}
+              />
+            </div>
+            <Button type="button" variant="outline" size="sm" className="h-11 text-xs px-2 shrink-0" onClick={() => setPickerOpen(true)} title="All items (Ctrl+I)">
+              <ListIcon className="h-3.5 w-3.5" />
+            </Button>
           </div>
-          <Tabs value={priceLevel} onValueChange={(v) => setPriceLevel(v as PriceLevel)}>
-            <TabsList className="grid grid-cols-3 w-full h-8">
-              <TabsTrigger value="sale" className="text-xs">Retail</TabsTrigger>
-              <TabsTrigger value="wholesale" className="text-xs">Wholesale</TabsTrigger>
-              <TabsTrigger value="mrp" className="text-xs">MRP</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          {layout.sections.priceLevelTabs && (
+            <Tabs value={priceLevel} onValueChange={(v) => setPriceLevel(v as PriceLevel)}>
+              <TabsList className="grid grid-cols-3 w-full h-8">
+                <TabsTrigger value="sale" className="text-xs">Retail</TabsTrigger>
+                <TabsTrigger value="wholesale" className="text-xs">Wholesale</TabsTrigger>
+                <TabsTrigger value="mrp" className="text-xs">MRP</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
         </div>
         <ScrollArea className="flex-1">
           {filtered.length === 0 ? (
@@ -320,7 +375,7 @@ function POS() {
                   onClick={() => addSmart(p, 1)}
                   className="text-left rounded-lg border border-border bg-card hover:border-primary hover:shadow-sm transition p-2.5 group"
                 >
-                  {p.image_url ? (
+                  {layout.sections.productImages && p.image_url ? (
                     <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-20 object-cover rounded mb-1.5" />
                   ) : null}
                   <div className="font-medium text-sm leading-tight truncate">{p.name}</div>
@@ -340,8 +395,16 @@ function POS() {
         </ScrollArea>
       </Card>
 
+      <div
+        onMouseDown={startResize(0)}
+        className="w-2 mx-0.5 shrink-0 cursor-col-resize group flex items-center justify-center"
+        title="Drag to resize"
+      >
+        <div className="w-1 h-10 rounded-full bg-border group-hover:bg-primary transition-colors" />
+      </div>
+
       {/* CENTER — cart */}
-      <Card className="col-span-5 flex flex-col overflow-hidden">
+      <Card className="flex flex-col overflow-hidden" style={{ width: `${layout.colPct[1]}%` }}>
         <div className="px-4 h-12 border-b border-border flex items-center justify-between">
           <div className="flex items-center gap-2">
             <ShoppingCart className="h-4 w-4 text-primary" />
@@ -433,30 +496,55 @@ function POS() {
           )}
         </ScrollArea>
 
-        <div className="border-t border-border p-2 flex items-center gap-2 bg-muted/30 text-[10px] text-muted-foreground overflow-x-auto">
-          <Button variant="outline" size="sm" onClick={holdBill} disabled={!cart.length}>
-            <Pause className="h-3.5 w-3.5 mr-1" /> Hold <span className="kbd ml-2">F5</span>
-          </Button>
-          <span className="whitespace-nowrap"><span className="kbd">F2</span> search · <span className="kbd">End</span>/<span className="kbd">F3</span> discount · <span className="kbd">Enter</span> pay · <span className="kbd">F5</span> hold · <span className="kbd">F6</span> recall · <span className="kbd">F8</span> print · type <b>3*</b> then scan for qty 3</span>
-          <div className="flex-1" />
-          <Button variant="outline" size="sm" disabled={!cart.length} onClick={() => window.print()}>
-            <Printer className="h-3.5 w-3.5 mr-1" /> Print
-          </Button>
-        </div>
+        {layout.sections.keypadHints && (
+          <div className="border-t border-border p-2 flex items-center gap-2 bg-muted/30 text-[10px] text-muted-foreground overflow-x-auto">
+            <Button variant="outline" size="sm" onClick={holdBill} disabled={!cart.length}>
+              <Pause className="h-3.5 w-3.5 mr-1" /> Hold <span className="kbd ml-2">F5</span>
+            </Button>
+            <span className="whitespace-nowrap"><span className="kbd">F2</span> search · <span className="kbd">Ctrl+I</span> all items · <span className="kbd">End</span>/<span className="kbd">F3</span> discount · <span className="kbd">Enter</span> pay · <span className="kbd">F5</span> hold · <span className="kbd">F6</span> recall · <span className="kbd">F8</span> print · type <b>3*</b> then scan for qty 3</span>
+            <div className="flex-1" />
+            <Button variant="outline" size="sm" disabled={!cart.length} onClick={() => window.print()}>
+              <Printer className="h-3.5 w-3.5 mr-1" /> Print
+            </Button>
+          </div>
+        )}
+        {!layout.sections.keypadHints && (
+          <div className="border-t border-border p-2 flex items-center gap-2 bg-muted/30">
+            <Button variant="outline" size="sm" onClick={holdBill} disabled={!cart.length}>
+              <Pause className="h-3.5 w-3.5 mr-1" /> Hold
+            </Button>
+            <div className="flex-1" />
+            <Button variant="outline" size="sm" disabled={!cart.length} onClick={() => window.print()}>
+              <Printer className="h-3.5 w-3.5 mr-1" /> Print
+            </Button>
+          </div>
+        )}
 
       </Card>
 
+      <div
+        onMouseDown={startResize(1)}
+        className="w-2 mx-0.5 shrink-0 cursor-col-resize group flex items-center justify-center"
+        title="Drag to resize"
+      >
+        <div className="w-1 h-10 rounded-full bg-border group-hover:bg-primary transition-colors" />
+      </div>
+
       {/* RIGHT — totals + pay */}
-      <Card className="col-span-3 flex flex-col overflow-hidden">
+      <Card className="flex flex-col overflow-hidden" style={{ width: `${layout.colPct[2]}%` }}>
         <div className="px-4 h-12 border-b border-border flex items-center justify-between">
           <span className="font-display font-semibold">Summary</span>
           <CustomerPicker customers={customers as any} value={customerId} onChange={setCustomerId} onAdded={() => qc.invalidateQueries({ queryKey: ["customers"] })} />
         </div>
 
         <div className="p-4 space-y-3 flex-1">
-          <Row label="Subtotal" value={inr(totals.subtotal)} />
-          <Row label="CGST" value={inr(totals.cgst)} />
-          <Row label="SGST" value={inr(totals.sgst)} />
+          {layout.sections.gstBreakdown && (
+            <>
+              <Row label="Subtotal" value={inr(totals.subtotal)} />
+              <Row label="CGST" value={inr(totals.cgst)} />
+              <Row label="SGST" value={inr(totals.sgst)} />
+            </>
+          )}
           <div className="flex items-center gap-2 pt-2 border-t border-border">
             <Percent className="h-3.5 w-3.5 text-muted-foreground" />
             <Label className="text-xs text-muted-foreground flex-1" title="Auto-distributed across every product line on save (Marg style)">Bill discount</Label>
@@ -482,6 +570,14 @@ function POS() {
           </Button>
         </div>
       </Card>
+      </div>
+
+      <PosLayoutPanel
+        open={customizing}
+        layout={layout}
+        onClose={() => setCustomizing(false)}
+        onChange={setLayout}
+      />
 
       <VariantPickDialog
         ask={variantAsk}
@@ -596,6 +692,18 @@ function POS() {
         onClose={() => setWaAsk(null)}
       />
 
+      <ProductPickerDialog
+        open={pickerOpen}
+        products={products}
+        onClose={() => { setPickerOpen(false); searchRef.current?.focus(); }}
+        onPick={(p) => {
+          addSmart(p, qtyMultiplierRef.current || 1);
+          qtyMultiplierRef.current = 1;
+          setPickerOpen(false);
+          searchRef.current?.focus();
+        }}
+      />
+
     </div>
   );
 }
@@ -606,6 +714,205 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="text-muted-foreground">{label}</span>
       <span className="font-mono tabular-nums">{value}</span>
     </div>
+  );
+}
+
+// "All items" picker for POS billing — opened via Ctrl+I or the button next
+// to the search box, for adding to the cart without scanning/typing a code.
+// Arrow keys move the highlighted row, Enter adds it (same variant-picker
+// flow as a normal scan, via addSmart).
+function ProductPickerDialog({
+  open, products, onClose, onPick,
+}: {
+  open: boolean;
+  products: { id: string; name: string; barcode: string | null; sku: string | null; sale_price: number; stock: number }[];
+  onClose: () => void;
+  onPick: (p: any) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [hi, setHi] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return products.slice(0, 200);
+    return products.filter((p) =>
+      p.name.toLowerCase().includes(term) ||
+      (p.barcode ?? "").toLowerCase().includes(term) ||
+      (p.sku ?? "").toLowerCase().includes(term),
+    ).slice(0, 200);
+  }, [q, products]);
+
+  useEffect(() => {
+    if (open) {
+      setQ("");
+      setHi(0);
+      setTimeout(() => searchInputRef.current?.focus(), 30);
+    }
+  }, [open]);
+  useEffect(() => { setHi(0); }, [q]);
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>(`[data-idx="${hi}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [hi]);
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
+        <DialogHeader><DialogTitle>All items</DialogTitle></DialogHeader>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            ref={searchInputRef}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search by name, barcode or SKU…"
+            className="pl-8"
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, filtered.length - 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+              else if (e.key === "Enter") { e.preventDefault(); const p = filtered[hi]; if (p) onPick(p); }
+              else if (e.key === "Escape") { e.preventDefault(); onClose(); }
+            }}
+          />
+        </div>
+        <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto border rounded-md divide-y">
+          {filtered.length === 0 && (
+            <div className="p-4 text-sm text-muted-foreground text-center">No items match "{q}"</div>
+          )}
+          {filtered.map((p, idx) => (
+            <button
+              key={p.id}
+              type="button"
+              data-idx={idx}
+              onMouseEnter={() => setHi(idx)}
+              onClick={() => onPick(p)}
+              className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-3 ${idx === hi ? "bg-accent" : ""}`}
+            >
+              <span className="truncate">{p.name}</span>
+              <span className="flex items-center gap-2 shrink-0">
+                <span className="text-xs font-mono text-muted-foreground">{p.barcode || p.sku || "—"}</span>
+                <span className="text-xs font-mono">{inr(p.sale_price)}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="text-xs text-muted-foreground">↑↓ to move · Enter to add · Esc to close</div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Customize the POS screen: show/hide optional sections, and save the
+// current layout (including panel widths, dragged on the page itself) as a
+// named template to switch between later. Saved per-device in localStorage.
+function PosLayoutPanel({
+  open, layout, onClose, onChange,
+}: {
+  open: boolean;
+  layout: PosLayoutConfig;
+  onClose: () => void;
+  onChange: (l: PosLayoutConfig) => void;
+}) {
+  const [templates, setTemplates] = useState(() => listTemplates());
+  const [newName, setNewName] = useState("");
+  useEffect(() => { if (open) setTemplates(listTemplates()); }, [open]);
+
+  const toggle = (key: keyof PosLayoutConfig["sections"]) => (v: boolean) => {
+    onChange({ ...layout, sections: { ...layout.sections, [key]: v } });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><LayoutGrid className="h-4 w-4" /> Customize POS layout</DialogTitle></DialogHeader>
+
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Drag the thin dividers between the Products / Bill / Summary panels on the page to
+            resize them. Turn sections on or off below, then save the result as a template.
+          </p>
+
+          <div className="space-y-2">
+            <ToggleRow label="Retail / Wholesale / MRP tabs" checked={layout.sections.priceLevelTabs} onChange={toggle("priceLevelTabs")} />
+            <ToggleRow label="Keyboard shortcut hint strip" checked={layout.sections.keypadHints} onChange={toggle("keypadHints")} />
+            <ToggleRow label="CGST / SGST breakdown in Summary" checked={layout.sections.gstBreakdown} onChange={toggle("gstBreakdown")} />
+            <ToggleRow label="Product photos in the grid" checked={layout.sections.productImages} onChange={toggle("productImages")} />
+          </div>
+
+          <div className="pt-3 border-t border-border space-y-2">
+            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Save as template</Label>
+            <div className="flex gap-2">
+              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Counter 1" />
+              <Button
+                variant="outline"
+                disabled={!newName.trim()}
+                onClick={() => {
+                  saveTemplate(newName.trim(), layout);
+                  setTemplates(listTemplates());
+                  setNewName("");
+                  toast.success(`Saved template "${newName.trim()}"`);
+                }}
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+
+          {templates.length > 0 && (
+            <div className="space-y-1.5">
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Saved templates</Label>
+              {templates.map((t) => (
+                <div key={t.name} className="flex items-center justify-between gap-2 rounded-md border border-border px-3 h-9">
+                  <span className="text-sm truncate">{t.name}</span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      size="sm" variant="ghost" className="h-7 text-xs"
+                      onClick={() => {
+                        const cfg = applyTemplate(t.name);
+                        if (cfg) { onChange(cfg); toast.success(`Applied "${t.name}"`); }
+                      }}
+                    >
+                      Apply
+                    </Button>
+                    <Button
+                      size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                      onClick={() => { deleteTemplate(t.name); setTemplates(listTemplates()); }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onChange(DEFAULT_POS_LAYOUT)}
+          >
+            Reset to default
+          </Button>
+          <Button onClick={onClose}>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="flex items-center justify-between rounded-md border border-border px-3 h-10 cursor-pointer hover:bg-accent/50">
+      <span className="text-sm">{label}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-4 w-4 accent-primary"
+      />
+    </label>
   );
 }
 
@@ -660,18 +967,18 @@ function CustomerPicker({
         </Button>
         <DialogContent>
           <DialogHeader><DialogTitle>New customer</DialogTitle></DialogHeader>
-          <div className="space-y-3">
+          <div className="space-y-3" data-enter-nav onKeyDown={onEnterFocusNext}>
             <div><Label>Name</Label><Input value={name} onChange={e => setName(e.target.value)} /></div>
             <div><Label>Phone</Label><Input value={phone} onChange={e => setPhone(e.target.value)} /></div>
+            <DialogFooter>
+              <Button onClick={async () => {
+                if (!name) return;
+                const { data, error } = await supabase.from("customers").insert({ name, phone }).select().single();
+                if (error) return toast.error(error.message);
+                onAdded(); onChange(data!.id); setOpen(false); setName(""); setPhone("");
+              }}>Save</Button>
+            </DialogFooter>
           </div>
-          <DialogFooter>
-            <Button onClick={async () => {
-              if (!name) return;
-              const { data, error } = await supabase.from("customers").insert({ name, phone }).select().single();
-              if (error) return toast.error(error.message);
-              onAdded(); onChange(data!.id); setOpen(false); setName(""); setPhone("");
-            }}>Save</Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
       {selected?.phone && <span className="text-[10px] text-muted-foreground">{selected.phone}</span>}

@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus, Trash2, ShoppingCart, Eye, Scan, Pencil, List as ListIcon, Search } from "lucide-react";
 import { toast } from "sonner";
 import { inr } from "@/lib/format";
+import { onEnterFocusNext } from "@/lib/keyboard-nav";
 
 type Supplier = { id: string; name: string };
 type Product = {
@@ -160,8 +161,14 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
   // move to the neighbouring column once the cursor is at the start/end of
   // the text. End saves the whole bill.
   const cellRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const COL_ORDER = ["barcode", "hsn", "qty", "cost", "mrp", "sale", "gst"] as const;
-  type Col = typeof COL_ORDER[number];
+  // Cost is intentionally left out of this ordered list: it's the column
+  // that both Enter *and* Left/Right arrow navigation skip over, since it's
+  // pre-filled from the product master and only needs a direct click to
+  // change. It still has its own ref/cell (via COST_COL below) for that
+  // manual click-in case.
+  const COL_ORDER = ["barcode", "hsn", "qty", "mrp", "sale", "gst"] as const;
+  const COST_COL = "cost" as const;
+  type Col = typeof COL_ORDER[number] | typeof COST_COL;
   const NEXT_COL: Record<Col, Col | null> = {
     barcode: "hsn",
     hsn: "qty",
@@ -206,6 +213,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
       return;
     }
     if (e.key === "ArrowLeft" && input.selectionStart === 0 && input.selectionEnd === 0) {
+      if (col === COST_COL) return; // cost sits outside the arrow chain — see COL_ORDER comment
       const pos = COL_ORDER.indexOf(col);
       const prev = COL_ORDER[pos - 1];
       if (prev) { e.preventDefault(); focusCell(idx, prev, false); }
@@ -216,6 +224,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
       input.selectionStart === input.value.length &&
       input.selectionEnd === input.value.length
     ) {
+      if (col === COST_COL) return;
       const pos = COL_ORDER.indexOf(col);
       const next = COL_ORDER[pos + 1];
       if (next) { e.preventDefault(); focusCell(idx, next, false); }
@@ -416,7 +425,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         <div className="flex-1 min-h-0 overflow-y-auto pr-1">
 
 
-        <div className="grid gap-3 sm:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-4" data-enter-nav onKeyDown={onEnterFocusNext}>
           <div><Label>Bill No.</Label><Input value={billNo} onChange={(e) => setBillNo(e.target.value)} /></div>
           <div><Label>Date</Label><Input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} /></div>
           <div className="sm:col-span-2">
@@ -628,13 +637,21 @@ function QuickAddProductDialog({
           <DialogTitle>Quick Add Product</DialogTitle>
           <p className="text-xs text-muted-foreground">New barcode <span className="font-mono">{barcode}</span> — fill details to add to inventory.</p>
         </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2" data-enter-nav onKeyDown={onEnterFocusNext}>
           <div className="sm:col-span-2"><Label>Name *</Label><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} /></div>
           <div><Label>HSN</Label><Input value={hsn} onChange={(e) => setHsn(e.target.value)} /></div>
           <div><Label>GST %</Label><Input inputMode="decimal" value={gst} onChange={(e) => setGst(e.target.value)} /></div>
           <div><Label>Purchase Cost</Label><Input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} /></div>
           <div><Label>Sale Price</Label><Input inputMode="decimal" value={sale} onChange={(e) => setSale(e.target.value)} /></div>
-          <div><Label>MRP</Label><Input inputMode="decimal" value={mrp} onChange={(e) => setMrp(e.target.value)} /></div>
+          <div>
+            <Label>MRP</Label>
+            <Input
+              inputMode="decimal"
+              value={mrp}
+              onChange={(e) => setMrp(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !saving) { e.preventDefault(); save(); } }}
+            />
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
