@@ -268,7 +268,7 @@ function POS() {
     searchRef.current?.focus();
   };
 
-  const onSearchEnter = () => {
+  const onSearchEnter = async () => {
     const raw = search.trim();
     if (!raw) { if (cart.length) setPayOpen(true); return; }
     // "N*" or "N*CODE" — sets multiplier for next scan
@@ -287,22 +287,78 @@ function POS() {
       return;
     }
     const q = raw.toLowerCase();
-    // A barcode may belong to a specific price variant — bill that one directly.
-    const vHit = variants.find(v => (v.barcode ?? "").toLowerCase() === q);
-    if (vHit) {
-      const parent = products.find(p => p.id === vHit.product_id);
-      if (parent) {
-        addVariant(parent, vHit, qtyMultiplierRef.current);
-        qtyMultiplierRef.current = 1; setSearch(""); return;
+
+    // IMPORTANT: resolve a product-level barcode BEFORE resolving a variant
+    // barcode. A product can have its own barcode and also have multiple
+    // MRP/price variants. In that case the scan MUST open the price picker,
+    // not silently bill a matching variant/default price.
+    const qty = qtyMultiplierRef.current;
+
+    // FIRST: resolve a parent-product barcode. This is intentionally before
+    // variant-barcode resolution. If the parent has multiple MRP variants,
+    // addScannedProduct() fetches the variants and opens the picker.
+    let exactProduct = products.find(
+      p => p.barcode?.trim().toLowerCase() === q || p.sku?.trim().toLowerCase() === q
+    );
+
+    // Do an exact database lookup as a fallback. This handles scanners used
+    // immediately after startup and products outside the 500-row POS cache.
+    if (!exactProduct) {
+      try {
+        const { data } = await supabase
+          .from("products")
+          .select("id,name,sku,barcode,hsn_code,mrp,sale_price,wholesale_price,gst_rate,stock,unit,image_url")
+          .eq("barcode", raw)
+          .eq("is_active", true)
+          .maybeSingle();
+        if (data) exactProduct = data as Product;
+      } catch {
+        // Continue to variant lookup below.
       }
     }
-    const exact = products.find(p => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q);
-    if (exact) {
-      const qty = qtyMultiplierRef.current;
+
+    if (exactProduct) {
       qtyMultiplierRef.current = 1;
       setSearch("");
-      void addScannedProduct(exact, qty);
+      await addScannedProduct(exactProduct, qty);
       return;
+    }
+
+    // Only when the code is NOT the parent product barcode should it be
+    // treated as a variant-specific barcode and billed directly.
+    let vHit = variants.find(v => (v.barcode ?? "").trim().toLowerCase() === q);
+    if (!vHit) {
+      try {
+        const { data } = await supabase
+          .from("product_variants")
+          .select("id,product_id,label,barcode,mrp,sale_price")
+          .eq("barcode", raw)
+          .maybeSingle();
+        if (data) vHit = data as Variant;
+      } catch {
+        // No matching variant.
+      }
+    }
+    if (vHit) {
+      let parent = products.find(p => p.id === vHit!.product_id);
+      if (!parent) {
+        try {
+          const { data } = await supabase
+            .from("products")
+            .select("id,name,sku,barcode,hsn_code,mrp,sale_price,wholesale_price,gst_rate,stock,unit,image_url")
+            .eq("id", vHit.product_id)
+            .maybeSingle();
+          if (data) parent = data as Product;
+        } catch {
+          // Parent could not be resolved.
+        }
+      }
+      if (parent) {
+        addVariant(parent, vHit, qty);
+        qtyMultiplierRef.current = 1;
+        setSearch("");
+        return;
+      }
     }
     if (filtered.length === 1) {
       const qty = qtyMultiplierRef.current;
@@ -412,7 +468,13 @@ function POS() {
                 className="pl-9 h-11 font-mono"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && onSearchEnter()}
+                onKeyDown={e => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void onSearchEnter();
+                  }
+                }}
               />
             </div>
             <Button type="button" variant="outline" size="sm" className="h-11 text-xs px-2 shrink-0" onClick={() => setPickerOpen(true)} title="All items (Ctrl+I)">
