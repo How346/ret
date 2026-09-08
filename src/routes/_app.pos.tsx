@@ -477,7 +477,7 @@ function POS() {
   );
 
   return (
-    <div className="h-[calc(100vh-3rem)] flex flex-col bg-background">
+    <div data-pos-root className="h-[calc(100vh-3rem)] flex flex-col bg-background [&_*:focus-visible]:outline-none [&_*:focus-visible]:ring-0 [&_*:focus-visible]:ring-offset-0">
       <div className="flex items-center justify-end px-3 pt-2">
         <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setCustomizing(true)}>
           <LayoutGrid className="h-3.5 w-3.5 mr-1" /> Customize layout
@@ -523,11 +523,8 @@ function POS() {
                   <div className="text-[10px] sm:text-[11px] text-muted-foreground mt-0.5 font-mono truncate">
                     {p.sku ?? p.barcode ?? "—"}
                   </div>
-                  <div className="flex items-center justify-between mt-2">
+                  <div className="mt-2">
                     <span className="font-display font-bold text-xs sm:text-sm truncate">{inr(priceFor(p))}</span>
-                    <Badge variant={p.stock <= 0 ? "destructive" : "secondary"} className="text-[10px] h-4 px-1.5">
-                      {num(p.stock, 0)}
-                    </Badge>
                   </div>
                 </button>
               ))}
@@ -986,7 +983,7 @@ function PosLayoutPanel({
                     key={preset.id}
                     type="button"
                     onClick={() => { onChange(preset.config); toast.success(`Applied ${preset.name} layout`); }}
-                    className={`rounded-lg border p-3 text-left transition ${selected ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-border hover:border-primary/50 hover:bg-muted/50"}`}
+                    className={`rounded-lg border p-3 text-left transition ${selected ? "border-primary bg-primary/10" : "border-border hover:border-primary/50 hover:bg-muted/50"}`}
                   >
                     <div className="font-semibold text-sm">{preset.name}</div>
                     <div className="text-[11px] leading-4 text-muted-foreground mt-1">{preset.description}</div>
@@ -1444,7 +1441,7 @@ function VariantPickDialog({
               autoFocus={i === 0}
               onMouseEnter={() => setSel(i)}
               className={`w-full rounded-md border p-3 text-left transition ${
-                sel === i ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-border hover:bg-muted"
+                sel === i ? "border-primary bg-primary/10" : "border-border hover:bg-muted"
               }`}
               onClick={() => onPick(v)}
             >

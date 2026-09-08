@@ -14,7 +14,7 @@
 <div class="warning"><b>🔒 Private-key safety:</b> this page signs licenses locally in your browser. Do not publish your private key or this generator with a private key pre-filled. Prefer opening this file offline. Anyone who gets your private key can create licenses your POS will accept.</div>
 <div class="grid">
 <div class="field full"><label>Private key (PKCS#8 PEM)</label><div class="keyrow"><input id="privateKey" type="password" autocomplete="off" placeholder="Paste private-key.pem here"><button class="btn secondary" id="show">Show</button><button class="btn secondary" id="fileBtn">Import .pem</button><input id="file" type="file" accept=".pem,.key,text/plain" hidden></div><div class="small">The private key is read only in this browser tab and is never sent anywhere by this page.</div></div>
-<div class="field"><label>Customer / Shop</label><input id="customer" placeholder="Sharma General Store"></div>
+<div class="field"><label>Registered to</label><input id="customer" placeholder="Sharma General Store / Person name"></div>
 <div class="field"><label>HWID</label><input id="hwid" placeholder="7F42-A91C-..." autocomplete="off"></div>
 <div class="field"><label>Plan</label><select id="plan"><option value="standard">Standard</option><option value="professional" selected>Professional</option><option value="enterprise">Enterprise</option></select></div>
 <div class="field"><label>Duration</label><select id="duration"><option value="30">30 days</option><option value="90">90 days</option><option value="365" selected>365 days</option><option value="1825">5 years</option><option value="lifetime">Lifetime</option></select></div>
@@ -30,13 +30,17 @@
 'use strict';
 const $=id=>document.getElementById(id);
 let lastLicense='';
+let trustedNowMs=Date.now();
+let timeSource='local';
 function b64u(buf){return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function pemToBytes(pem){const b64=String(pem).replace(/-----BEGIN PRIVATE KEY-----/,'').replace(/-----END PRIVATE KEY-----/,'').replace(/\s/g,'');const bin=atob(b64);const out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out.buffer}
-function canonical(p){return JSON.stringify({v:Number(p.v),product:String(p.product),licenseId:String(p.licenseId),hwid:String(p.hwid),plan:String(p.plan),issuedAt:String(p.issuedAt),expiresAt:String(p.expiresAt),features:Array.isArray(p.features)?p.features.map(String):[]})}
+function canonical(p){return JSON.stringify({v:Number(p.v),product:String(p.product),licenseId:String(p.licenseId),hwid:String(p.hwid),plan:String(p.plan),registeredTo:String(p.registeredTo||''),issuedAt:String(p.issuedAt),expiresAt:String(p.expiresAt),features:Array.isArray(p.features)?p.features.map(String):[]})}
 function newId(){const a=new Uint8Array(8);crypto.getRandomValues(a);$('licenseId').value='QRN-'+[...a].map(x=>x.toString(16).padStart(2,'0')).join('').toUpperCase()}
 function isoDateLocal(days){const d=new Date();d.setHours(12,0,0,0);d.setDate(d.getDate()+Number(days));return d.toISOString().slice(0,10)}
 function setStatus(t,ok=false){$('status').textContent=t;$('status').className='status'+(ok?' ok':'')}
-function updateExpiry(){const v=$('duration').value;$('expires').value=v==='lifetime'?'2099-12-31':isoDateLocal(v)}
+function isoDateFromBase(days){const d=new Date(trustedNowMs);d.setHours(12,0,0,0);d.setDate(d.getDate()+Number(days));return d.toISOString().slice(0,10)}
+function updateExpiry(){const v=$('duration').value;$('expires').value=v==='lifetime'?'2099-12-31':isoDateFromBase(v)}
+async function syncServerTime(){try{const started=Date.now();const r=await fetch('https://tllxvwwfvvbtdatnqhit.supabase.co/rest/v1/',{cache:'no-store',headers:{'Cache-Control':'no-cache'}});const ended=Date.now();const d=Date.parse(r.headers.get('date')||'');if(Number.isFinite(d)){trustedNowMs=d+Math.floor((ended-started)/2);timeSource='server';updateExpiry();setStatus('✓ Server time synced. License dates will use server time.',true);return}}catch{}trustedNowMs=Date.now();timeSource='local';updateExpiry();setStatus('Offline: using this computer time for generation.')}
 $('show').onclick=()=>{$('privateKey').type=$('privateKey').type==='password'?'text':'password';$('show').textContent=$('privateKey').type==='password'?'Show':'Hide'};
 $('fileBtn').onclick=()=>$('file').click();
 $('file').onchange=async e=>{const f=e.target.files?.[0];if(!f)return; $('privateKey').value=await f.text();setStatus('Private key imported locally.');e.target.value=''};
@@ -51,19 +55,19 @@ $('generate').onclick=async()=>{
   if(!/^[A-Z0-9-]{8,128}$/.test(hwid))throw new Error('HWID format looks invalid.');
   if(!$('licenseId').value)newId();
   const expires=$('expires').value;if(!expires)throw new Error('Expiry date is required.');
-  const payload={v:1,product:'quick-retail-nexus',licenseId:$('licenseId').value,hwid,plan:$('plan').value,issuedAt:new Date().toISOString(),expiresAt:new Date(expires+'T23:59:59Z').toISOString(),features:[...document.querySelectorAll('.check input:checked')].map(x=>x.value)};
+  const payload={v:1,product:'quick-retail-nexus',licenseId:$('licenseId').value,hwid,plan:$('plan').value,registeredTo:$('customer').value.trim(),issuedAt:new Date(trustedNowMs).toISOString(),expiresAt:new Date(expires+'T23:59:59Z').toISOString(),features:[...document.querySelectorAll('.check input:checked')].map(x=>x.value)};
   const key=await crypto.subtle.importKey('pkcs8',pemToBytes(pem),{name:'Ed25519'},false,['sign']);
   const data=new TextEncoder().encode(canonical(payload));
   const sig=await crypto.subtle.sign({name:'Ed25519'},key,data);
   const body=b64u(new TextEncoder().encode(canonical(payload)))+'.'+b64u(sig);
   lastLicense='QRN-LIC-V1\n'+body+'\n';
   $('output').value=lastLicense;$('download').disabled=false;$('copy').disabled=false;
-  setStatus('✓ License generated and signed locally. No network request was made.',true);
+  setStatus('✓ License generated and signed locally. Time source: '+(timeSource==='server'?'server':'offline computer clock')+'.',true);
  }catch(e){console.error(e);setStatus('Error: '+(e.message||e))}
 };
 $('download').onclick=()=>{const blob=new Blob([lastLicense],{type:'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='licence.lic';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
 $('copy').onclick=async()=>{await navigator.clipboard.writeText(lastLicense);setStatus('✓ License copied.',true)};
-newId();updateExpiry();
+newId();updateExpiry();void syncServerTime();
 </script>
 </body>
 </html>

@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getLicenseStatus: () => ipcRenderer.invoke("license:status"),
   installLicense: (licenseText) => ipcRenderer.invoke("license:install", licenseText),
   removeLicense: () => ipcRenderer.invoke("license:remove"),
+  syncLicenseTime: () => ipcRenderer.invoke("license:status"),
 
   // Returns the list of printers installed on this machine:
   // [{ name, displayName, isDefault, status }]

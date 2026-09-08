@@ -584,6 +584,12 @@ function StoreDataTab() {
 }
 
 
+function formatLicenseDate(value: string) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
+}
+
 function LicenseTab() {
   const { user } = useAuth();
   const { data: license } = useMyLicense();
@@ -670,10 +676,11 @@ function LicenseTab() {
             <div className="grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
               <Row2 label="License ID" value={<span className="font-mono text-xs">{p.licenseId}</span>} />
               <Row2 label="Plan" value={p.plan} />
-              <Row2 label="Issued" value={new Date(p.issuedAt).toLocaleDateString()} />
-              <Row2 label="Expires" value={new Date(p.expiresAt).toLocaleDateString()} />
+              <Row2 label="Issued" value={formatLicenseDate(p.issuedAt)} />
+              <Row2 label="Expires" value={formatLicenseDate(p.expiresAt)} />
               <Row2 label="Remaining" value={`${offlineLicense.daysLeft ?? 0} days`} />
-              <Row2 label="Signature" value="Verified locally" />
+              <Row2 label="Registered to" value={p.registeredTo || p.customerName || "—"} />
+              <Row2 label="Signature" value={offlineLicense?.timeSource === "server" ? "Verified · server time synced" : "Verified locally · offline time"} />
             </div>
             <Button variant="outline" className="text-destructive" onClick={removeOfflineLicense}>Remove License</Button>
           </div>
@@ -700,8 +707,9 @@ function LicenseTab() {
         <div className="grid md:grid-cols-2 gap-3 text-sm">
           <Row2 label="Key" value={<span className="font-mono">{license.key}</span>} />
           <Row2 label="Plan" value={license.plan} />
-          <Row2 label="Issued" value={new Date(license.issued_at).toLocaleDateString()} />
-          <Row2 label="Expires" value={new Date(license.expires_at).toLocaleDateString()} />
+          <Row2 label="Registered to" value={(user as any)?.user_metadata?.full_name || (user as any)?.email || "—"} />
+          <Row2 label="Issued" value={formatLicenseDate(license.issued_at)} />
+          <Row2 label="Expires" value={formatLicenseDate(license.expires_at)} />
           <Row2 label="Status" value={status.valid ? `Active · ${status.daysLeft} days left` : `Inactive (${status.reason})`} />
         </div>
       ) : (

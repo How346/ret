@@ -15,6 +15,8 @@ const CLOCK_BACKUP_FILE = 'clock-state.bak';
 const CLOCK_ROLLBACK_TOLERANCE_MS = 2 * 60 * 1000;
 const CLOCK_REG_PATH = 'HKCU\\Software\\MarginERP\\QuickRetailNexus';
 const CLOCK_REG_VALUE = 'LastSeenUtcMs';
+const TIME_SYNC_URL = process.env.LICENSE_TIME_URL || 'https://tllxvwwfvvbtdatnqhit.supabase.co/rest/v1/';
+const SERVER_TIME_TIMEOUT_MS = 5000;
 
 function machineGuid() {
   if (process.platform === 'win32') {
@@ -111,6 +113,34 @@ function writeClockCheckpoint(app, value) {
   }
 }
 
+async function getTrustedNowMs(app) {
+  const localNow = Date.now();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SERVER_TIME_TIMEOUT_MS);
+    const started = Date.now();
+    const response = await fetch(TIME_SYNC_URL, {
+      method: 'HEAD',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const finished = Date.now();
+    const serverDate = response.headers.get('date');
+    const parsed = serverDate ? Date.parse(serverDate) : NaN;
+    if (Number.isFinite(parsed)) {
+      // HTTP Date has second precision. Compensate approximately for network
+      // latency by using half the round-trip time.
+      const trustedNow = parsed + Math.max(0, Math.floor((finished - started) / 2));
+      return { nowMs: trustedNow, source: 'server', serverDate: new Date(trustedNow).toISOString() };
+    }
+  } catch {
+    // No internet / server unavailable: continue with the persistent local
+    // high-water clock. Licensing remains usable offline.
+  }
+  return { nowMs: localNow, source: 'local-offline' };
+}
+
 function enforceMonotonicClock(app, nowMs) {
   if (!app) return;
 
@@ -140,11 +170,26 @@ function canonicalPayload(payload) {
     licenseId: String(payload.licenseId || ''),
     hwid: String(payload.hwid || ''),
     plan: String(payload.plan || 'standard'),
+    registeredTo: String(payload.registeredTo || ''),
     issuedAt: String(payload.issuedAt || ''),
     expiresAt: String(payload.expiresAt || ''),
     features: Array.isArray(payload.features) ? payload.features.map(String) : [],
   };
   return JSON.stringify(clean);
+}
+
+function canonicalPayloadLegacy(payload) {
+  // Compatibility with licenses generated before the Registered-to field was added.
+  return JSON.stringify({
+    v: Number(payload.v || 1),
+    product: String(payload.product || ''),
+    licenseId: String(payload.licenseId || ''),
+    hwid: String(payload.hwid || ''),
+    plan: String(payload.plan || 'standard'),
+    issuedAt: String(payload.issuedAt || ''),
+    expiresAt: String(payload.expiresAt || ''),
+    features: Array.isArray(payload.features) ? payload.features.map(String) : [],
+  });
 }
 
 function decodeBase64Url(value) {
@@ -198,10 +243,15 @@ function verifyLicenseText(text, expectedHWID = getHWID(), app = null) {
     Buffer.from(canonicalPayload(payload), 'utf8'),
     PUBLIC_KEY_PEM,
     signature,
+  ) || crypto.verify(
+    null,
+    Buffer.from(canonicalPayloadLegacy(payload), 'utf8'),
+    PUBLIC_KEY_PEM,
+    signature,
   );
   if (!verified) throw new Error('License signature is invalid');
 
-  const now = Date.now();
+  const now = arguments.length >= 4 && Number.isFinite(arguments[3]) ? arguments[3] : Date.now();
   // Enforce a persistent high-water mark before evaluating expiry. If an old
   // test/build left a checkpoint beyond this license's own expiry, it cannot
   // represent a legitimate observation for this license, so safely discard
@@ -224,6 +274,34 @@ function verifyLicenseText(text, expectedHWID = getHWID(), app = null) {
     payload,
     daysLeft: Math.max(0, Math.ceil((expires - now) / 86400000)),
   };
+}
+
+async function verifyLicenseWithTrustedTime(text, expectedHWID = getHWID(), app = null) {
+  const trusted = await getTrustedNowMs(app);
+  const result = verifyLicenseText(text, expectedHWID, app, trusted.nowMs);
+  return { ...result, timeSource: trusted.source, serverDate: trusted.serverDate || null };
+}
+
+async function readStoredLicenseAsync(app) {
+  const file = licensePath(app);
+  if (!fs.existsSync(file)) return { valid: false, reason: 'none' };
+  try {
+    const text = fs.readFileSync(file, 'utf8');
+    const result = await verifyLicenseWithTrustedTime(text, getHWID(), app);
+    return { ...result, fileName: FILE_NAME };
+  } catch (error) {
+    return { valid: false, reason: error?.message || 'Invalid license', fileName: FILE_NAME };
+  }
+}
+
+async function installLicenseAsync(app, text) {
+  const result = await verifyLicenseWithTrustedTime(text, getHWID(), app);
+  const dir = path.dirname(licensePath(app));
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${licensePath(app)}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, String(text).trim() + '\n', { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, licensePath(app));
+  return { ...result, fileName: FILE_NAME };
 }
 
 function readStoredLicense(app) {
@@ -260,7 +338,9 @@ module.exports = {
   getHWID,
   verifyLicenseText,
   readStoredLicense,
+  readStoredLicenseAsync,
   installLicense,
+  installLicenseAsync,
   removeLicense,
   licensePath,
 };
