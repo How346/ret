@@ -21,6 +21,7 @@ export function focusNextInSequence(
   ).filter((el) => {
     if ((el as HTMLInputElement).disabled) return false;
     if (el.getAttribute("aria-hidden") === "true") return false;
+    if (el.hasAttribute("data-enter-skip")) return false;
     if (el.tabIndex === -1 && el !== current) return false;
     // Skip elements hidden via display:none / not in layout (offsetParent is
     // null for those), but keep the element currently focused either way.

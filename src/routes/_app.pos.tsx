@@ -1342,8 +1342,35 @@ function WhatsAppSendDialog({
             <Input
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || e.isComposing) return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (!phone.trim() || sending || !ask) return;
+                setSending(true);
+                void (async () => {
+                  try {
+                    const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
+                    if (res.success) {
+                      if (res.mode === "desktop-browser" && res.imaged === false) {
+                        toast.warning("WhatsApp opened, but the bill image could not be copied. Try Copy Bill Image again.");
+                      } else {
+                        toast.success(res.mode === "desktop-browser"
+                          ? "Bill image copied — paste with Ctrl+V in WhatsApp and press Send"
+                          : "WhatsApp opened");
+                      }
+                    } else {
+                      toast.error("Could not open WhatsApp — check the number and try again");
+                    }
+                  } finally {
+                    setSending(false);
+                    onClose();
+                  }
+                })();
+              }}
               placeholder="10-digit mobile number"
               autoFocus
+              inputMode="tel"
             />
           </div>
           <p className="text-xs text-muted-foreground">
@@ -1379,7 +1406,7 @@ function WhatsAppSendDialog({
             }}
           >
             {sending && <Loader2 className="h-4 w-4 animate-spin" />}
-            Send
+            {sending ? "Preparing bill…" : "Copy Bill Image & Open WhatsApp"}
           </Button>
         </DialogFooter>
       </DialogContent>

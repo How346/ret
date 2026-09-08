@@ -153,25 +153,6 @@ ipcMain.handle("print:html", async (_event, payload) => {
 // messages on the shop's behalf.
 // ---------------------------------------------------------------------------
 
-function waitForNextPaint(win, timeoutMs, fallbackImage) {
-  return new Promise((resolve) => {
-    let done = false;
-    const handler = (_e, _dirty, img) => {
-      if (done) return;
-      done = true;
-      try { win.webContents.removeListener("paint", handler); } catch { /* ignore */ }
-      resolve(img);
-    };
-    win.webContents.on("paint", handler);
-    setTimeout(() => {
-      if (done) return;
-      done = true;
-      try { win.webContents.removeListener("paint", handler); } catch { /* ignore */ }
-      resolve(fallbackImage ?? null);
-    }, timeoutMs);
-  });
-}
-
 async function captureHtmlToClipboardImage(html, widthPx) {
   let tmpFile = null;
   let shotWin = null;
@@ -179,44 +160,41 @@ async function captureHtmlToClipboardImage(html, widthPx) {
     tmpFile = path.join(os.tmpdir(), `margin-erp-wa-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
     fs.writeFileSync(tmpFile, html, "utf8");
 
-    // Offscreen rendering (webPreferences.offscreen) is Electron's own
-    // purpose-built mechanism for capturing a page with no visible window
-    // at all — it always paints to an in-memory buffer, regardless of the
-    // window's on-screen visibility. A previous version of this used a
-    // normal window pushed off-screen + capturePage(), which some Windows
-    // GPU/driver combinations never actually composite (so the clipboard
-    // stayed empty); OSR avoids that failure mode entirely.
     shotWin = new BrowserWindow({
       show: false,
       width: widthPx,
-      height: 60,
-      webPreferences: { contextIsolation: true, sandbox: true, offscreen: true },
+      height: 900,
+      webPreferences: {
+        contextIsolation: true,
+        sandbox: true,
+        offscreen: true,
+      },
     });
-
-    let lastFrame = null;
-    shotWin.webContents.on("paint", (_event, _dirty, image) => {
-      lastFrame = image;
-    });
-    shotWin.webContents.setFrameRate(30);
 
     await shotWin.loadFile(tmpFile);
-    // Let barcodes/images/fonts settle and give OSR its first paint.
-    await waitForNextPaint(shotWin, 800, lastFrame);
 
-    const contentHeight = await shotWin.webContents.executeJavaScript(
-      "Math.ceil(document.documentElement.scrollHeight)",
-    );
-    const height = Math.max(60, Math.min(6000, Number(contentHeight) || 600));
-    shotWin.setSize(widthPx, height);
+    // Wait for fonts, images and layout to settle before measuring/capturing.
+    await shotWin.webContents.executeJavaScript(`
+      (async () => {
+        try { if (document.fonts?.ready) await document.fonts.ready; } catch (_) {}\n        const imgs = Array.from(document.images || []);\n        await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => {\n          img.addEventListener('load', r, { once: true });\n          img.addEventListener('error', r, { once: true });\n        })));\n        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));\n        return true;\n      })()
+    `, true);
 
-    // Resizing triggers new paints at the final size; wait for one, and
-    // force a repaint if nothing usable arrives on its own.
-    let image = await waitForNextPaint(shotWin, 900, null);
-    if ((!image || image.isEmpty() || image.getSize().height < height - 20) && !shotWin.isDestroyed()) {
-      shotWin.webContents.invalidate();
-      image = await waitForNextPaint(shotWin, 900, null);
-    }
-    if (!image) image = lastFrame;
+    const size = await shotWin.webContents.executeJavaScript(`({
+      width: Math.ceil(Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0)),
+      height: Math.ceil(Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0))
+    })`);
+    const height = Math.max(80, Math.min(6000, Number(size?.height) || 600));
+    const width = Math.max(280, Math.min(1200, Number(widthPx) || Number(size?.width) || 380));
+    shotWin.setSize(width, height);
+
+    // Give the resized page another two frames, then capture the actual page.
+    await shotWin.webContents.executeJavaScript(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`);
+    const image = await shotWin.webContents.capturePage({
+      x: 0,
+      y: 0,
+      width,
+      height,
+    });
     if (!image || image.isEmpty()) return false;
 
     clipboard.writeImage(image);
@@ -224,18 +202,12 @@ async function captureHtmlToClipboardImage(html, widthPx) {
   } catch {
     return false;
   } finally {
-    setTimeout(() => {
-      try {
-        if (shotWin && !shotWin.isDestroyed()) shotWin.destroy();
-      } catch {
-        /* ignore */
-      }
-      try {
-        if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-      } catch {
-        /* ignore */
-      }
-    }, 800);
+    try {
+      if (shotWin && !shotWin.isDestroyed()) shotWin.destroy();
+    } catch { /* ignore */ }
+    try {
+      if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+    } catch { /* ignore */ }
   }
 }
 

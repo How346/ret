@@ -350,7 +350,6 @@ function ProductForm({ value, onChange, categories }: {
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const hsnRef = useRef<HTMLInputElement>(null);
-  const uploadBtnRef = useRef<HTMLButtonElement>(null);
   const set = (k: keyof Product, v: any) => onChange({ ...value, [k]: v });
 
   return (
@@ -402,7 +401,6 @@ function ProductForm({ value, onChange, categories }: {
             placeholder="https://…"
             value={value.image_url ?? ""}
             onChange={e => set("image_url", e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); uploadBtnRef.current?.focus(); } }}
           />
           <input ref={fileRef} type="file" accept="image/*" hidden onChange={async e => {
             const f = e.target.files?.[0]; e.target.value = "";
@@ -416,7 +414,7 @@ function ProductForm({ value, onChange, categories }: {
             setUploading(false);
             toast.success("Image uploaded");
           }} />
-          <Button ref={uploadBtnRef} type="button" variant="outline" disabled={uploading} onClick={() => fileRef.current?.click()}>
+          <Button type="button" data-enter-skip variant="outline" disabled={uploading} onClick={() => fileRef.current?.click()}>
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
           </Button>
         </div>
