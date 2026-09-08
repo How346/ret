@@ -16,7 +16,9 @@ const CLOCK_ROLLBACK_TOLERANCE_MS = 2 * 60 * 1000;
 const CLOCK_REG_PATH = 'HKCU\\Software\\MarginERP\\QuickRetailNexus';
 const CLOCK_REG_VALUE = 'LastSeenUtcMs';
 const TIME_SYNC_URL = process.env.LICENSE_TIME_URL || 'https://tllxvwwfvvbtdatnqhit.supabase.co/rest/v1/';
-const SERVER_TIME_TIMEOUT_MS = 5000;
+const SERVER_TIME_TIMEOUT_MS = 2500;
+const TRUSTED_TIME_CACHE_MS = 15000;
+let trustedTimeCache = null;
 
 function machineGuid() {
   if (process.platform === 'win32') {
@@ -115,42 +117,49 @@ function writeClockCheckpoint(app, value) {
 
 async function getTrustedNowMs(app) {
   const localNow = Date.now();
+  if (trustedTimeCache && localNow - trustedTimeCache.fetchedAt < TRUSTED_TIME_CACHE_MS) {
+    return { ...trustedTimeCache, nowMs: trustedTimeCache.nowMs + (localNow - trustedTimeCache.fetchedAt) };
+  }
 
-  // Windows has a built-in NTP client. When the PC is online, ask the actual
-  // Windows time service (time.windows.com) for the current offset instead of
-  // trusting the possibly-wrong local clock. This is the preferred source.
+  // Primary Indian Standard Time source: CSIR-NPL public NTP service.
+  // time.nplindia.org is maintained by India's national time authority and
+  // provides IST/UTC(NPLI) through NTP. Keep several independent fallbacks.
+  const ntpServers = process.platform === 'win32'
+    ? ['time.nplindia.org', 'time.nplindia.in', 'time.windows.com', 'time.cloudflare.com']
+    : [];
+
   if (process.platform === 'win32') {
-    try {
-      const started = Date.now();
-      const out = execFileSync('w32tm', [
-        '/stripchart',
-        '/computer:time.windows.com',
-        '/dataonly',
-        '/samples:3',
-      ], { windowsHide: true, encoding: 'utf8', timeout: 8000 });
+    for (const server of ntpServers) {
+      try {
+        const out = execFileSync('w32tm', [
+          '/stripchart',
+          `/computer:${server}`,
+          '/dataonly',
+          '/samples:1',
+        ], { windowsHide: true, encoding: 'utf8', timeout: 7000 });
 
-      // Typical output contains an offset such as: +00.1234567s or -01.234s.
-      // Use the last numeric offset reported by the NTP query.
-      const matches = String(out).match(/([+-]\d+(?:\.\d+)?)s\s*$/gim);
-      if (matches?.length) {
-        const offsetSeconds = Number.parseFloat(matches[matches.length - 1].replace(/s\s*$/i, ''));
-        if (Number.isFinite(offsetSeconds) && Math.abs(offsetSeconds) < 7 * 86400) {
-          const finished = Date.now();
-          return {
-            nowMs: localNow + Math.round(offsetSeconds * 1000),
-            source: 'windows-time-server',
-            serverDate: new Date(localNow + Math.round(offsetSeconds * 1000)).toISOString(),
-          };
+        // Windows output varies by locale/version. Do not require the offset
+        // to be at the absolute end of the line.
+        const matches = String(out).match(/([+-]\d+(?:\.\d+)?)s\b/g);
+        if (matches?.length) {
+          const offsetSeconds = Number.parseFloat(matches[matches.length - 1].slice(0, -1));
+          if (Number.isFinite(offsetSeconds) && Math.abs(offsetSeconds) < 7 * 86400) {
+            const trustedNow = localNow + Math.round(offsetSeconds * 1000);
+            const result = { nowMs: trustedNow, source: server.startsWith('time.nplindia') ? 'npl-india-ntp' : 'ntp-fallback', serverDate: new Date(trustedNow).toISOString() };
+            trustedTimeCache = { ...result, fetchedAt: localNow };
+            return result;
+          }
         }
+      } catch {
+        // Try the next independent NTP source.
       }
-    } catch {
-      // Continue to HTTPS server-time fallbacks below.
     }
   }
 
-  // HTTPS Date headers are independent of the PC clock and work even when
-  // the Windows Time service is disabled. Microsoft is preferred here.
+  // HTTPS Date headers are a second layer. They do not depend on the PC's
+  // clock. NPL's web clock is preferred, then independent major providers.
   const timeUrls = [
+    'https://www.nplindia.org/clockcode/html/',
     'https://www.microsoft.com/',
     'https://www.cloudflare.com/',
     TIME_SYNC_URL,
@@ -161,18 +170,22 @@ async function getTrustedNowMs(app) {
       const timer = setTimeout(() => controller.abort(), SERVER_TIME_TIMEOUT_MS);
       const started = Date.now();
       const response = await fetch(url, {
-        method: 'HEAD',
+        method: 'GET',
         cache: 'no-store',
         headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
         signal: controller.signal,
       });
+      // Consume the body so Electron/node completes the request cleanly.
+      try { await response.arrayBuffer(); } catch {}
       clearTimeout(timer);
       const finished = Date.now();
       const serverDate = response.headers.get('date');
       const parsed = serverDate ? Date.parse(serverDate) : NaN;
       if (Number.isFinite(parsed)) {
         const trustedNow = parsed + Math.max(0, Math.floor((finished - started) / 2));
-        return { nowMs: trustedNow, source: 'server', serverDate: new Date(trustedNow).toISOString() };
+        const result = { nowMs: trustedNow, source: url.includes('nplindia.org') ? 'npl-india-web' : 'server', serverDate: new Date(trustedNow).toISOString() };
+        trustedTimeCache = { ...result, fetchedAt: localNow };
+        return result;
       }
     } catch {
       // Try the next independent time source.
@@ -264,7 +277,7 @@ function parseLicenseText(text) {
   return { payload, payloadB64: parts[0], signatureB64: parts[1] };
 }
 
-function verifyLicenseText(text, expectedHWID = getHWID(), app = null) {
+function verifyLicenseText(text, expectedHWID = getHWID(), app = null, nowOverrideMs = null, timeSource = 'local-offline') {
   const parsed = parseLicenseText(text);
   const { payload, signatureB64 } = parsed;
 
@@ -292,19 +305,21 @@ function verifyLicenseText(text, expectedHWID = getHWID(), app = null) {
   );
   if (!verified) throw new Error('License signature is invalid');
 
-  const now = arguments.length >= 4 && Number.isFinite(arguments[3]) ? arguments[3] : Date.now();
+  const now = Number.isFinite(nowOverrideMs) ? nowOverrideMs : Date.now();
   // Enforce a persistent high-water mark before evaluating expiry. If an old
   // test/build left a checkpoint beyond this license's own expiry, it cannot
   // represent a legitimate observation for this license, so safely discard
   // that stale checkpoint and start a fresh high-water mark. This avoids a
   // false rollback error after the PC clock has been corrected.
   if (app) {
-    const { primary, backup } = clockStatePaths(app);
-    const stored = Math.max(readClockFile(primary), readClockFile(backup), readWindowsClockCheckpoint());
-    if (stored > expires + CLOCK_ROLLBACK_TOLERANCE_MS && now <= expires) {
-      writeClockCheckpoint(app, now);
-    } else {
+    // A trusted network/NPL time source is authoritative. If the user moved
+    // the PC clock into the future and then corrected it, the trusted server
+    // time must win instead of comparing against the stale future checkpoint.
+    // High-water rollback protection is only needed while genuinely offline.
+    if (timeSource === 'local-offline') {
       enforceMonotonicClock(app, now);
+    } else {
+      writeClockCheckpoint(app, now);
     }
   }
   if (expires <= now) throw new Error('License has expired');
@@ -319,7 +334,7 @@ function verifyLicenseText(text, expectedHWID = getHWID(), app = null) {
 
 async function verifyLicenseWithTrustedTime(text, expectedHWID = getHWID(), app = null) {
   const trusted = await getTrustedNowMs(app);
-  const result = verifyLicenseText(text, expectedHWID, app, trusted.nowMs);
+  const result = verifyLicenseText(text, expectedHWID, app, trusted.nowMs, trusted.source);
   return { ...result, timeSource: trusted.source, serverDate: trusted.serverDate || null };
 }
 

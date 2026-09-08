@@ -1415,21 +1415,44 @@ function VariantPickDialog({
   // price, 1-9 pick a row straight away, Esc cancels.
   const options: (Variant | null)[] = [null, ...variants];
   const [sel, setSel] = useState(0);
+  const activeRowRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => { if (ask) setSel(0); }, [ask]);
+
+  // Radix Dialog uses a focus trap, so a handler attached only to DialogContent
+  // can occasionally miss arrow keys. Capture them at window level while this
+  // dialog is open; selection never depends on browser focus.
+  useEffect(() => {
+    if (!ask) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSel((i) => e.key === "ArrowDown" ? Math.min(options.length - 1, i + 1) : Math.max(0, i - 1));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        onPick(options[sel] ?? null);
+        return;
+      }
+      if (/^[1-9]$/.test(e.key)) {
+        const i = Number(e.key) - 1;
+        if (i < options.length) { e.preventDefault(); e.stopPropagation(); onPick(options[i] ?? null); }
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [ask, options.length, onPick, sel]);
+
+  useEffect(() => {
+    activeRowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [sel]);
 
   return (
     <Dialog open={!!ask} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent
         className="max-w-md outline-none ring-0 focus:outline-none focus:ring-0 focus:ring-offset-0 [&_*:focus]:outline-none [&_*:focus]:ring-0 [&_*:focus]:ring-offset-0 [&_*:focus-visible]:outline-none [&_*:focus-visible]:ring-0 [&_*:focus-visible]:ring-offset-0"
-        onKeyDown={(e) => {
-          if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); (document.activeElement as HTMLElement | null)?.blur(); setSel((i) => Math.min(options.length - 1, i + 1)); return; }
-          if (e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); (document.activeElement as HTMLElement | null)?.blur(); setSel((i) => Math.max(0, i - 1)); return; }
-          if (e.key === "Enter") { e.preventDefault(); onPick(options[sel] ?? null); return; }
-          if (/^[1-9]$/.test(e.key)) {
-            const i = Number(e.key) - 1;
-            if (i < options.length) { e.preventDefault(); onPick(options[i] ?? null); }
-          }
-        }}
       >
         <DialogHeader>
           <DialogTitle>Select price — {ask?.product.name}</DialogTitle>
@@ -1438,6 +1461,8 @@ function VariantPickDialog({
           {options.map((v, i) => (
             <button
               key={v?.id ?? "default"}
+              ref={sel === i ? activeRowRef : undefined}
+              tabIndex={-1}
               autoFocus={false}
               onMouseDown={(e) => e.preventDefault()}
               onMouseEnter={() => setSel(i)}

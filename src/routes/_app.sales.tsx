@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { inr } from "@/lib/format";
+import { formatIndianDate, formatIndianDateTime } from "@/lib/date-format";
 import { useEffect, useMemo, useState } from "react";
 import { Eye, Printer, Pencil, Trash2, Search, Download, FileText } from "lucide-react";
 import { toast } from "sonner";
@@ -88,7 +89,7 @@ function SalesPage() {
   const exportCsv = () => {
     const header = "Invoice,Date,Customer,Phone,Subtotal,CGST,SGST,IGST,Discount,Total,Cash,Card,UPI\n";
     const rows = filtered.map((s: any) =>
-      [s.invoice_no, new Date(s.created_at).toLocaleString(), s.customers?.name ?? "Walk-in",
+      [s.invoice_no, formatIndianDateTime(s.created_at), s.customers?.name ?? "Walk-in",
        s.customers?.phone ?? "", s.subtotal, s.cgst, s.sgst, s.igst, s.discount, s.total,
        s.paid_cash, s.paid_card, s.paid_upi].join(","),
     ).join("\n");
@@ -170,7 +171,7 @@ function SalesPage() {
               {filtered.map((s: any) => (
                 <tr key={s.id} className="border-t border-border hover:bg-muted/30">
                   <td className="py-2 px-3 font-mono">{s.invoice_no}</td>
-                  <td className="py-2 whitespace-nowrap">{new Date(s.created_at).toLocaleString()}</td>
+                  <td className="py-2 whitespace-nowrap">{formatIndianDateTime(s.created_at)}</td>
                   <td className="py-2">{s.customers?.name ?? <span className="text-muted-foreground">Walk-in</span>}</td>
                   <td className="py-2 text-right font-mono">{inr(Number(s.subtotal))}</td>
                   <td className="py-2 text-right font-mono">{inr(Number(s.cgst) + Number(s.sgst) + Number(s.igst))}</td>
@@ -246,7 +247,7 @@ function ViewDialog({ sale, onClose, loadItems, onReprint }: any) {
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="font-mono">{sale.invoice_no}</DialogTitle>
-          <p className="text-xs text-muted-foreground">{new Date(sale.created_at).toLocaleString()} · {sale.customers?.name ?? "Walk-in"}</p>
+          <p className="text-xs text-muted-foreground">{formatIndianDateTime(sale.created_at)} · {sale.customers?.name ?? "Walk-in"}</p>
         </DialogHeader>
         <div className="max-h-80 overflow-auto border border-border rounded">
           <table className="w-full text-sm">

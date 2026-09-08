@@ -15,6 +15,7 @@ import { Plus, Trash2, ShoppingCart, Eye, Scan, Pencil, List as ListIcon, Search
 import { toast } from "sonner";
 import { inr } from "@/lib/format";
 import { onEnterFocusNext } from "@/lib/keyboard-nav";
+import { formatIndianDate } from "@/lib/date-format";
 
 type Supplier = { id: string; name: string };
 type Product = {
@@ -107,7 +108,7 @@ function PurchasesPage() {
           <TableBody>
             {purchases.map((p) => (
               <TableRow key={p.id}>
-                <TableCell>{p.bill_date}</TableCell>
+                <TableCell>{formatIndianDate(p.bill_date)}</TableCell>
                 <TableCell className="font-mono text-xs">{p.bill_no || "—"}</TableCell>
                 <TableCell>{p.supplier_name || "—"}</TableCell>
                 <TableCell className="text-right font-mono">{inr(p.subtotal)}</TableCell>
@@ -757,7 +758,7 @@ function ViewPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
           <div className="space-y-3 text-sm">
             <div className="grid grid-cols-2 gap-2">
               <div><b>Supplier:</b> {data.head.supplier_name}</div>
-              <div><b>Date:</b> {data.head.bill_date}</div>
+              <div><b>Date:</b> {formatIndianDate(data.head.bill_date)}</div>
               <div><b>Payment:</b> {data.head.payment_mode} · Paid {inr(data.head.paid)}</div>
             </div>
             <Table>

@@ -537,7 +537,7 @@ function PurchaseHistory({ productId }: { productId: string }) {
           <tbody>
             {last4.map((r, i) => (
               <tr key={i} className="border-t border-border">
-                <td className="py-1 font-mono text-xs">{r.purchase?.bill_date ?? "—"}</td>
+                <td className="py-1 font-mono text-xs">{formatIndianDate(r.purchase?.bill_date)}</td>
                 <td className="font-mono text-xs">{r.purchase?.bill_no ?? "—"}</td>
                 <td>{r.purchase?.supplier_name ?? "—"}</td>
                 <td className="text-right font-mono">{num(r.qty, 0)}</td>
