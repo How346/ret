@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, clipboard } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, clipboard, nativeImage } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -167,7 +167,6 @@ async function captureHtmlToClipboardImage(html, widthPx) {
       webPreferences: {
         contextIsolation: true,
         sandbox: true,
-        offscreen: true,
       },
     });
 
@@ -197,8 +196,20 @@ async function captureHtmlToClipboardImage(html, widthPx) {
     });
     if (!image || image.isEmpty()) return false;
 
-    clipboard.writeImage(image);
-    return true;
+    // Re-create the native image from PNG bytes before putting it on the
+    // Windows clipboard. This avoids a few Electron/Windows cases where a
+    // directly captured NativeImage is valid for capturePage() but is not
+    // exposed to the clipboard as CF_DIB/bitmap data.
+    const png = image.toPNG();
+    if (!png || png.length < 32) return false;
+    const clipboardImage = nativeImage.createFromBuffer(png);
+    if (!clipboardImage || clipboardImage.isEmpty()) return false;
+    // Write the bitmap explicitly through Electron's multi-format clipboard
+    // API as well; this is more reliable on Windows than relying on a single
+    // writeImage() call when another application owns the clipboard.
+    clipboard.write({ image: clipboardImage, text: "" });
+    const verify = clipboard.readImage();
+    return !verify.isEmpty();
   } catch {
     return false;
   } finally {

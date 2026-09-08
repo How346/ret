@@ -206,8 +206,8 @@ function ProductsPage() {
                 </>
               )}
               <DialogFooter>
-                <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-                <Button onClick={save}>Save</Button>
+                <Button variant="outline" data-enter-skip onClick={() => setEditing(null)}>Cancel</Button>
+                <Button data-enter-submit onClick={save}>Save</Button>
               </DialogFooter>
             </div>
           </DialogContent>
