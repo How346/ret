@@ -115,29 +115,70 @@ function writeClockCheckpoint(app, value) {
 
 async function getTrustedNowMs(app) {
   const localNow = Date.now();
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), SERVER_TIME_TIMEOUT_MS);
-    const started = Date.now();
-    const response = await fetch(TIME_SYNC_URL, {
-      method: 'HEAD',
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    const finished = Date.now();
-    const serverDate = response.headers.get('date');
-    const parsed = serverDate ? Date.parse(serverDate) : NaN;
-    if (Number.isFinite(parsed)) {
-      // HTTP Date has second precision. Compensate approximately for network
-      // latency by using half the round-trip time.
-      const trustedNow = parsed + Math.max(0, Math.floor((finished - started) / 2));
-      return { nowMs: trustedNow, source: 'server', serverDate: new Date(trustedNow).toISOString() };
+
+  // Windows has a built-in NTP client. When the PC is online, ask the actual
+  // Windows time service (time.windows.com) for the current offset instead of
+  // trusting the possibly-wrong local clock. This is the preferred source.
+  if (process.platform === 'win32') {
+    try {
+      const started = Date.now();
+      const out = execFileSync('w32tm', [
+        '/stripchart',
+        '/computer:time.windows.com',
+        '/dataonly',
+        '/samples:3',
+      ], { windowsHide: true, encoding: 'utf8', timeout: 8000 });
+
+      // Typical output contains an offset such as: +00.1234567s or -01.234s.
+      // Use the last numeric offset reported by the NTP query.
+      const matches = String(out).match(/([+-]\d+(?:\.\d+)?)s\s*$/gim);
+      if (matches?.length) {
+        const offsetSeconds = Number.parseFloat(matches[matches.length - 1].replace(/s\s*$/i, ''));
+        if (Number.isFinite(offsetSeconds) && Math.abs(offsetSeconds) < 7 * 86400) {
+          const finished = Date.now();
+          return {
+            nowMs: localNow + Math.round(offsetSeconds * 1000),
+            source: 'windows-time-server',
+            serverDate: new Date(localNow + Math.round(offsetSeconds * 1000)).toISOString(),
+          };
+        }
+      }
+    } catch {
+      // Continue to HTTPS server-time fallbacks below.
     }
-  } catch {
-    // No internet / server unavailable: continue with the persistent local
-    // high-water clock. Licensing remains usable offline.
   }
+
+  // HTTPS Date headers are independent of the PC clock and work even when
+  // the Windows Time service is disabled. Microsoft is preferred here.
+  const timeUrls = [
+    'https://www.microsoft.com/',
+    'https://www.cloudflare.com/',
+    TIME_SYNC_URL,
+  ];
+  for (const url of timeUrls) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), SERVER_TIME_TIMEOUT_MS);
+      const started = Date.now();
+      const response = await fetch(url, {
+        method: 'HEAD',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      const finished = Date.now();
+      const serverDate = response.headers.get('date');
+      const parsed = serverDate ? Date.parse(serverDate) : NaN;
+      if (Number.isFinite(parsed)) {
+        const trustedNow = parsed + Math.max(0, Math.floor((finished - started) / 2));
+        return { nowMs: trustedNow, source: 'server', serverDate: new Date(trustedNow).toISOString() };
+      }
+    } catch {
+      // Try the next independent time source.
+    }
+  }
+
   return { nowMs: localNow, source: 'local-offline' };
 }
 

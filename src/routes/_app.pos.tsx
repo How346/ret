@@ -1420,10 +1420,10 @@ function VariantPickDialog({
   return (
     <Dialog open={!!ask} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent
-        className="max-w-md"
+        className="max-w-md outline-none ring-0 focus:outline-none focus:ring-0 focus:ring-offset-0 [&_*:focus]:outline-none [&_*:focus]:ring-0 [&_*:focus]:ring-offset-0 [&_*:focus-visible]:outline-none [&_*:focus-visible]:ring-0 [&_*:focus-visible]:ring-offset-0"
         onKeyDown={(e) => {
-          if (e.key === "ArrowDown") { e.preventDefault(); setSel((i) => Math.min(options.length - 1, i + 1)); return; }
-          if (e.key === "ArrowUp") { e.preventDefault(); setSel((i) => Math.max(0, i - 1)); return; }
+          if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); (document.activeElement as HTMLElement | null)?.blur(); setSel((i) => Math.min(options.length - 1, i + 1)); return; }
+          if (e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); (document.activeElement as HTMLElement | null)?.blur(); setSel((i) => Math.max(0, i - 1)); return; }
           if (e.key === "Enter") { e.preventDefault(); onPick(options[sel] ?? null); return; }
           if (/^[1-9]$/.test(e.key)) {
             const i = Number(e.key) - 1;
@@ -1438,9 +1438,10 @@ function VariantPickDialog({
           {options.map((v, i) => (
             <button
               key={v?.id ?? "default"}
-              autoFocus={i === 0}
+              autoFocus={false}
+              onMouseDown={(e) => e.preventDefault()}
               onMouseEnter={() => setSel(i)}
-              className={`w-full rounded-md border p-3 text-left transition ${
+              className={`w-full rounded-md border p-3 text-left transition outline-none ring-0 focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 ${
                 sel === i ? "border-primary bg-primary/10" : "border-border hover:bg-muted"
               }`}
               onClick={() => onPick(v)}
