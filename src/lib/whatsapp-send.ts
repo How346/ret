@@ -29,6 +29,7 @@ export type SendReceiptResult = {
   success: boolean;
   mode: "desktop-browser" | "web-text-only";
   imaged?: boolean;
+  pdfOpened?: boolean;
   errorType?: string;
 };
 
@@ -50,7 +51,7 @@ export async function sendReceiptOnWhatsApp(opts: {
   if (isDesktopPrintingAvailable() && window.electronAPI?.sendReceiptWhatsAppWeb) {
     try {
       const res = await window.electronAPI.sendReceiptWhatsAppWeb(opts.html, opts.phone, opts.message, widthPx);
-      return { success: !!res?.success, mode: "desktop-browser", imaged: res?.imaged, errorType: res?.errorType };
+      return { success: !!res?.success, mode: "desktop-browser", imaged: res?.imaged, pdfOpened: res?.pdfOpened, errorType: res?.errorType };
     } catch (err: any) {
       return { success: false, mode: "desktop-browser", errorType: String(err?.message || err) };
     }

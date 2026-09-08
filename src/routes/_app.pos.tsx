@@ -1353,7 +1353,9 @@ function WhatsAppSendDialog({
                     const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
                     if (res.success) {
                       if (res.mode === "desktop-browser" && res.imaged === false) {
-                        toast.warning("WhatsApp opened, but the bill image could not be copied. Try Copy Bill Image again.");
+                        toast.warning(res.pdfOpened
+                          ? "Bill image could not be copied. A PDF fallback was opened — attach it in WhatsApp."
+                          : "Bill image could not be copied. Please try again or use Print.");
                       } else {
                         toast.success(res.mode === "desktop-browser"
                           ? "Bill image copied — paste with Ctrl+V in WhatsApp and press Send"
@@ -1390,10 +1392,12 @@ function WhatsAppSendDialog({
                 const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
                 if (res.success) {
                   if (res.mode === "desktop-browser" && res.imaged === false) {
-                    toast.warning("WhatsApp opened, but the bill image couldn't be copied — you can still send the text, or print/screenshot the bill separately");
+                    toast.warning(res.pdfOpened
+                      ? "Bill image could not be copied. A PDF fallback was opened — attach it in WhatsApp."
+                      : "Bill image could not be copied. Please try again or use Print.");
                   } else {
                     toast.success(res.mode === "desktop-browser"
-                      ? "WhatsApp Web opened in your browser — paste the image (Ctrl+V) and send"
+                      ? "WhatsApp Web opened — paste the bill image (Ctrl+V) and press Send"
                       : "WhatsApp opened");
                   }
                 } else {

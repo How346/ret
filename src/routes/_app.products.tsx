@@ -12,6 +12,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Plus, Pencil, Search, AlertTriangle, Upload, Download, Tags, Loader2, Trash2, Printer, Image as ImageIcon, Layers, History as HistoryIcon, Eye } from "lucide-react";
 import { inr, num } from "@/lib/format";
 import { toast } from "sonner";
@@ -48,6 +52,9 @@ function ProductsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [labelOpen, setLabelOpen] = useState(false);
   const csvRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const { data: products = [] } = useQuery({
     queryKey: ["products"],
@@ -91,11 +98,36 @@ function ProductsPage() {
   };
 
   const remove = async (p: Product) => {
-    if (!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
-    const { error } = await supabase.from("products").delete().eq("id", p.id);
-    if (error) return toast.error(error.message);
-    toast.success("Deleted");
-    qc.invalidateQueries({ queryKey: ["products"] });
+    setDeleteTarget(p);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    setDeleting(true);
+    try {
+      const { error } = await supabase.from("products").delete().eq("id", target.id);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      setSelected(prev => {
+        const next = new Set(prev);
+        next.delete(target.id);
+        return next;
+      });
+      toast.success("Product deleted");
+      await qc.invalidateQueries({ queryKey: ["products"] });
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+      // Avoid the native confirm()/stale-button focus problem that could leave
+      // Chromium's keyboard focus in a broken state after a deletion.
+      requestAnimationFrame(() => {
+        try { window.getSelection()?.removeAllRanges(); } catch { /* ignore */ }
+        searchRef.current?.focus();
+      });
+    }
   };
 
   const toggleSel = (id: string) => {
@@ -180,7 +212,7 @@ function ProductsPage() {
         <div className="flex-1" />
         <div className="relative w-72">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search name, SKU, barcode" value={q} onChange={e => setQ(e.target.value)} className="pl-9" />
+          <Input ref={searchRef} data-products-search placeholder="Search name, SKU, barcode" value={q} onChange={e => setQ(e.target.value)} className="pl-9" />
         </div>
         <input ref={csvRef} type="file" accept=".csv,text/csv" hidden onChange={e => {
           const f = e.target.files?.[0]; if (f) onCsvFile(f); e.target.value = "";
@@ -206,8 +238,8 @@ function ProductsPage() {
                 </>
               )}
               <DialogFooter>
-                <Button variant="outline" data-enter-skip onClick={() => setEditing(null)}>Cancel</Button>
-                <Button data-enter-submit onClick={save}>Save</Button>
+                <Button type="button" data-enter-skip variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+                <Button type="button" onClick={save}>Save</Button>
               </DialogFooter>
             </div>
           </DialogContent>
@@ -266,6 +298,24 @@ function ProductsPage() {
           </table>
         </ScrollArea>
       </Card>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open && !deleting) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete product?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <strong>{deleteTarget?.name}</strong>. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={deleting} onClick={(e) => { e.preventDefault(); void confirmDelete(); }}>
+              {deleting && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+              {deleting ? "Deleting…" : "Delete product"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <LabelDialog
         open={labelOpen} onClose={() => setLabelOpen(false)}
@@ -368,8 +418,9 @@ function ProductForm({ value, onChange, categories }: {
           value={value.category_id ?? "_none"}
           onValueChange={v => {
             set("category_id", v === "_none" ? null : v);
-            // Keep the Enter-driven flow going: jump to HSN after choosing.
-            setTimeout(() => { hsnRef.current?.focus(); hsnRef.current?.select(); }, 30);
+            // Keep the Enter-driven flow going: selecting either a category or
+            // “None” puts the cursor in the next field (HSN).
+            setTimeout(() => { hsnRef.current?.focus(); hsnRef.current?.select(); }, 60);
           }}
         >
           <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>

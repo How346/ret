@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, clipboard, nativeImage } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, clipboard } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -155,70 +155,120 @@ ipcMain.handle("print:html", async (_event, payload) => {
 
 async function captureHtmlToClipboardImage(html, widthPx) {
   let tmpFile = null;
+  let pngFile = null;
   let shotWin = null;
   try {
     tmpFile = path.join(os.tmpdir(), `margin-erp-wa-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
+    pngFile = path.join(os.tmpdir(), `margin-erp-wa-${Date.now()}-${Math.random().toString(36).slice(2)}.png`);
     fs.writeFileSync(tmpFile, html, "utf8");
 
+    // Use a real Chromium page instead of Electron's offscreen renderer. This
+    // is considerably more reliable on Windows machines/drivers when the
+    // resulting bitmap must be placed on the native Windows clipboard.
     shotWin = new BrowserWindow({
       show: false,
-      width: widthPx,
+      width: Math.max(280, Number(widthPx) || 380),
       height: 900,
-      webPreferences: {
-        contextIsolation: true,
-        sandbox: true,
-      },
+      x: -10000,
+      y: -10000,
+      skipTaskbar: true,
+      focusable: false,
+      backgroundColor: "#ffffff",
+      webPreferences: { contextIsolation: true, sandbox: true },
     });
 
     await shotWin.loadFile(tmpFile);
-
-    // Wait for fonts, images and layout to settle before measuring/capturing.
     await shotWin.webContents.executeJavaScript(`
       (async () => {
-        try { if (document.fonts?.ready) await document.fonts.ready; } catch (_) {}\n        const imgs = Array.from(document.images || []);\n        await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => {\n          img.addEventListener('load', r, { once: true });\n          img.addEventListener('error', r, { once: true });\n        })));\n        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));\n        return true;\n      })()
+        try { if (document.fonts?.ready) await document.fonts.ready; } catch (_) {}
+        const imgs = Array.from(document.images || []);
+        await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => {
+          img.addEventListener('load', r, { once: true });
+          img.addEventListener('error', r, { once: true });
+        })));
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return true;
+      })()
     `, true);
 
     const size = await shotWin.webContents.executeJavaScript(`({
       width: Math.ceil(Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0)),
       height: Math.ceil(Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0))
     })`);
-    const height = Math.max(80, Math.min(6000, Number(size?.height) || 600));
     const width = Math.max(280, Math.min(1200, Number(widthPx) || Number(size?.width) || 380));
+    const height = Math.max(80, Math.min(6000, Number(size?.height) || 600));
     shotWin.setSize(width, height);
 
-    // Give the resized page another two frames, then capture the actual page.
     await shotWin.webContents.executeJavaScript(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`);
-    const image = await shotWin.webContents.capturePage({
-      x: 0,
-      y: 0,
-      width,
-      height,
-    });
+
+    // A short showInactive() makes Chromium paint a hidden/off-screen window
+    // consistently without putting it in front of the cashier.
+    try { shotWin.showInactive(); } catch { /* ignore */ }
+    await new Promise(r => setTimeout(r, 80));
+
+    const image = await shotWin.webContents.capturePage({ x: 0, y: 0, width, height });
     if (!image || image.isEmpty()) return false;
 
-    // Re-create the native image from PNG bytes before putting it on the
-    // Windows clipboard. This avoids a few Electron/Windows cases where a
-    // directly captured NativeImage is valid for capturePage() but is not
-    // exposed to the clipboard as CF_DIB/bitmap data.
     const png = image.toPNG();
-    if (!png || png.length < 32) return false;
-    const clipboardImage = nativeImage.createFromBuffer(png);
-    if (!clipboardImage || clipboardImage.isEmpty()) return false;
-    // Write the bitmap explicitly through Electron's multi-format clipboard
-    // API as well; this is more reliable on Windows than relying on a single
-    // writeImage() call when another application owns the clipboard.
-    clipboard.write({ image: clipboardImage, text: "" });
-    const verify = clipboard.readImage();
-    return !verify.isEmpty();
+    fs.writeFileSync(pngFile, png);
+
+    // Primary native Electron clipboard path.
+    try {
+      clipboard.writeImage(image);
+      if (!clipboard.readImage().isEmpty()) return true;
+    } catch { /* fall through to Windows clipboard fallback */ }
+
+    // Windows fallback: System.Windows.Forms writes the actual bitmap to the
+    // Windows clipboard. This helps on PCs where Chromium/Electron's clipboard
+    // bridge is blocked by another clipboard manager or driver.
+    if (process.platform === "win32") {
+      try {
+        const { spawnSync } = require("node:child_process");
+        const psPath = pngFile.replace(/'/g, "''");
+        const command = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img=[System.Drawing.Image]::FromFile('${psPath}'); try { [System.Windows.Forms.Clipboard]::SetImage($img) } finally { $img.Dispose() }`;
+        const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", command], { windowsHide: true, timeout: 10000 });
+        if (result.status === 0) return true;
+      } catch { /* fall through */ }
+    }
+
+    return false;
   } catch {
     return false;
   } finally {
-    try {
-      if (shotWin && !shotWin.isDestroyed()) shotWin.destroy();
-    } catch { /* ignore */ }
-    try {
-      if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-    } catch { /* ignore */ }
+    try { if (shotWin && !shotWin.isDestroyed()) shotWin.destroy(); } catch { /* ignore */ }
+    try { if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    try { if (pngFile && fs.existsSync(pngFile)) fs.unlinkSync(pngFile); } catch { /* ignore */ }
+  }
+}
+
+async function createBillPdf(html, widthPx) {
+  let tmpFile = null;
+  let pdfWin = null;
+  try {
+    tmpFile = path.join(os.tmpdir(), `margin-erp-bill-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
+    const pdfFile = path.join(app.getPath("temp"), `Margin-ERP-Bill-${Date.now()}.pdf`);
+    fs.writeFileSync(tmpFile, html, "utf8");
+    pdfWin = new BrowserWindow({
+      show: false,
+      width: Math.max(280, Number(widthPx) || 380),
+      height: 900,
+      webPreferences: { contextIsolation: true, sandbox: true },
+    });
+    await pdfWin.loadFile(tmpFile);
+    await pdfWin.webContents.executeJavaScript(`document.fonts?.ready ? document.fonts.ready : Promise.resolve()`);
+    const pdf = await pdfWin.webContents.printToPDF({
+      printBackground: true,
+      pageSize: "A4",
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    });
+    fs.writeFileSync(pdfFile, pdf);
+    await shell.openPath(pdfFile);
+    return pdfFile;
+  } catch {
+    return null;
+  } finally {
+    try { if (pdfWin && !pdfWin.isDestroyed()) pdfWin.destroy(); } catch { /* ignore */ }
+    try { if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
   }
 }
 
@@ -247,12 +297,20 @@ ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
   if (!phone) return { success: false, errorType: "missing-phone" };
 
   const imaged = await captureHtmlToClipboardImage(html, widthPx);
+  let pdfOpened = false;
+
+  // If the native image clipboard still cannot be written, create a real PDF
+  // as a reliable fallback and open it. The cashier can attach that PDF from
+  // WhatsApp's document picker instead of being left with a broken action.
+  if (!imaged) {
+    pdfOpened = !!(await createBillPdf(html, widthPx));
+  }
 
   try {
     const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
     await shell.openExternal(chatUrl);
-    return { success: true, imaged };
+    return { success: true, imaged, pdfOpened };
   } catch (err) {
-    return { success: false, errorType: String((err && err.message) || err), imaged };
+    return { success: false, errorType: String((err && err.message) || err), imaged, pdfOpened };
   }
 });

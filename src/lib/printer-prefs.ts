@@ -24,7 +24,7 @@ type ElectronPrintAPI = {
     phone: string,
     message: string,
     widthPx?: number,
-  ) => Promise<{ success: boolean; errorType?: string; imaged?: boolean }>;
+  ) => Promise<{ success: boolean; errorType?: string; imaged?: boolean; pdfOpened?: boolean }>;
   getHWID: () => Promise<{ hwid: string }>;
   getLicenseStatus: () => Promise<OfflineLicenseStatus>;
   installLicense: (licenseText: string) => Promise<OfflineLicenseStatus>;

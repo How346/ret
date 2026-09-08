@@ -30,22 +30,7 @@ export function focusNextInSequence(
   const idx = focusables.indexOf(current);
   if (idx === -1) return false;
   const nextIdx = idx + direction;
-  if (nextIdx < 0) return false;
-
-  // At the end of a data-entry form, Enter should submit/save rather than
-  // moving into a Cancel button. Forms can mark their primary action with
-  // data-enter-submit.
-  if (nextIdx >= focusables.length && direction === 1) {
-    const submit = container.querySelector<HTMLElement>(
-      '[data-enter-submit]:not([disabled])',
-    );
-    if (submit) {
-      submit.click();
-      return true;
-    }
-    return false;
-  }
-
+  if (nextIdx < 0 || nextIdx >= focusables.length) return false;
   const next = focusables[nextIdx];
   next.focus();
   if (next instanceof HTMLInputElement) next.select();
