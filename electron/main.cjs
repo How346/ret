@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, clipboard } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, clipboard, nativeImage } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -288,6 +288,39 @@ ipcMain.handle("whatsapp:open-web", async () => {
 // Captures the bill as an image (copied to clipboard), then opens the
 // customer's WhatsApp Web chat in the user's default browser with the
 // message pre-filled, ready for the cashier to paste the image and send.
+ipcMain.handle("whatsapp:send-image", async (_event, payload) => {
+  const imageDataUrl = String((payload && payload.imageDataUrl) || "");
+  const phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");
+  const message = String((payload && payload.message) || "");
+  const html = String((payload && payload.html) || "");
+  const widthPx = Math.max(280, Math.min(1200, Number(payload && payload.widthPx) || 380));
+
+  if (!phone) return { success: false, errorType: "missing-phone" };
+  if (!imageDataUrl.startsWith("data:image/")) return { success: false, errorType: "invalid-image-data" };
+
+  let imaged = false;
+  try {
+    const image = nativeImage.createFromDataURL(imageDataUrl);
+    if (!image.isEmpty()) {
+      clipboard.writeImage(image);
+      imaged = !clipboard.readImage().isEmpty();
+    }
+  } catch {
+    imaged = false;
+  }
+
+  let pdfOpened = false;
+  if (!imaged && html) pdfOpened = !!(await createBillPdf(html, widthPx));
+
+  try {
+    const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
+    await shell.openExternal(chatUrl);
+    return { success: true, imaged, pdfOpened };
+  } catch (err) {
+    return { success: false, errorType: String((err && err.message) || err), imaged, pdfOpened };
+  }
+});
+
 ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
   const html = (payload && payload.html) || "";
   const phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");

@@ -39,4 +39,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Resolves to { success: boolean, errorType?: string, imaged?: boolean }.
   sendReceiptWhatsAppWeb: (html, phone, message, widthPx) =>
     ipcRenderer.invoke("whatsapp:send-web", { html, phone, message, widthPx }),
+
+  // Renderer html2canvas image -> main-process nativeImage -> OS clipboard.
+  sendReceiptWhatsAppImage: (imageDataUrl, phone, message, html, widthPx) =>
+    ipcRenderer.invoke("whatsapp:send-image", { imageDataUrl, phone, message, html, widthPx }),
 });

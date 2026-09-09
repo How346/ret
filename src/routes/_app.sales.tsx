@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { inr } from "@/lib/format";
 import { formatIndianDate, formatIndianDateTime } from "@/lib/date-format";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Eye, Printer, Pencil, Trash2, Search, Download, FileText, Scan, ShoppingCart, Plus, Minus, X } from "lucide-react";
 import { toast } from "sonner";
 import { useStoreSettings } from "@/hooks/use-store-settings";
