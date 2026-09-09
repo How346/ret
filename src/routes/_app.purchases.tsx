@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Trash2, ShoppingCart, Eye, Scan, Pencil, List as ListIcon, Search } from "lucide-react";
@@ -45,6 +46,7 @@ function PurchasesPage() {
   const [open, setOpen] = useState(false);
   const [viewing, setViewing] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const { data: purchases = [] } = useQuery({
     queryKey: ["purchases"],
@@ -119,7 +121,7 @@ function PurchasesPage() {
                   <div className="flex gap-1 justify-end">
                     <Button size="icon" variant="ghost" onClick={() => setViewing(p.id)}><Eye className="h-4 w-4" /></Button>
                     <Button size="icon" variant="ghost" onClick={() => setEditing(p.id)}><Pencil className="h-4 w-4" /></Button>
-                    <Button size="icon" variant="ghost" onClick={() => { if (confirm("Delete purchase & reverse stock?")) remove.mutate(p.id); }}>
+                    <Button size="icon" variant="ghost" onClick={() => setDeleteTarget(p.id)}>
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                   </div>
@@ -135,6 +137,12 @@ function PurchasesPage() {
 
       {viewing && <ViewPurchaseDialog id={viewing} onClose={() => setViewing(null)} />}
       {editing && <EditPurchaseDialog id={editing} onClose={() => setEditing(null)} />}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>Delete purchase bill?</AlertDialogTitle><AlertDialogDescription>This will permanently remove the purchase and reverse its stock impact. This cannot be undone.</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction disabled={remove.isPending} onClick={() => { if (deleteTarget) remove.mutate(deleteTarget, { onSettled: () => setDeleteTarget(null) }); }}>Delete & Reverse Stock</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -421,7 +429,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         }}
       >
         <DialogHeader><DialogTitle>New Purchase Bill</DialogTitle></DialogHeader>
-        <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 overscroll-contain">
 
 
         <div className="grid gap-3 sm:grid-cols-4" data-enter-nav onKeyDown={onEnterFocusNext}>
@@ -788,6 +796,18 @@ function ViewPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
 }
 
 function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }) {
+  // Catch Ctrl+I at window level as well as the dialog, so Chromium/Electron or
+  // an input cannot swallow the shortcut. It is scoped to this edit dialog.
+  useEffect(() => {
+    const onShortcut = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "i") {
+        e.preventDefault(); e.stopPropagation(); setPickerOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onShortcut, true);
+    return () => window.removeEventListener("keydown", onShortcut, true);
+  }, []);
+
   const qc = useQueryClient();
   const [items, setItems] = useState<LineItem[]>([]);
   const [head, setHead] = useState<any>(null);
@@ -822,10 +842,13 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
 
   useEffect(() => {
     (async () => {
-      const { data: h, error: he } = await supabase.from("purchases").select("*").eq("id", id).single();
-      if (he) { toast.error(he.message); return; }
-      const { data: its, error: ie } = await supabase.from("purchase_items").select("*").eq("purchase_id", id);
-      if (ie) { toast.error(ie.message); return; }
+      const [hr, ir] = await Promise.all([
+        supabase.from("purchases").select("*").eq("id", id).single(),
+        supabase.from("purchase_items").select("*").eq("purchase_id", id),
+      ]);
+      const h = hr.data, its = ir.data;
+      if (hr.error) { toast.error(hr.error.message); return; }
+      if (ir.error) { toast.error(ir.error.message); return; }
       const ids = Array.from(new Set((its ?? []).map((r:any)=>r.product_id).filter(Boolean)));
       const { data: masters } = ids.length ? await supabase.from("products").select("id,barcode,hsn_code,purchase_price,sale_price,mrp,gst_rate").in("id", ids) : { data: [] as any[] };
       const masterMap = new Map((masters ?? []).map((m:any)=>[m.id,m]));

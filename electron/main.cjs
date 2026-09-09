@@ -315,13 +315,15 @@ ipcMain.handle("whatsapp:send-image", async (_event, payload) => {
   let pdfOpened = false;
   if (!imaged && html) pdfOpened = !!(await createBillPdf(html, widthPx));
 
+  // wa.me is the most reliable external hand-off: the user's default browser
+  // resolves it to WhatsApp Web/Desktop depending on their setup.
   try {
-    const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
+    const chatUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
     await shell.openExternal(chatUrl);
     return { success: true, imaged, pdfOpened, url: chatUrl };
   } catch (err) {
     try {
-      const fallbackUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+      const fallbackUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
       await shell.openExternal(fallbackUrl);
       return { success: true, imaged, pdfOpened, url: fallbackUrl, fallback: true };
     } catch (err2) {
