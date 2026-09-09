@@ -290,7 +290,10 @@ ipcMain.handle("whatsapp:open-web", async () => {
 // message pre-filled, ready for the cashier to paste the image and send.
 ipcMain.handle("whatsapp:send-image", async (_event, payload) => {
   const imageDataUrl = String((payload && payload.imageDataUrl) || "");
-  const phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");
+  let phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");
+  if (phone.length === 10) phone = `91${phone}`;
+  else if (phone.length === 11 && phone.startsWith("0")) phone = `91${phone.slice(1)}`;
+  else if (phone.startsWith("00")) phone = phone.slice(2);
   const message = String((payload && payload.message) || "");
   const html = String((payload && payload.html) || "");
   const widthPx = Math.max(280, Math.min(1200, Number(payload && payload.widthPx) || 380));
@@ -315,9 +318,15 @@ ipcMain.handle("whatsapp:send-image", async (_event, payload) => {
   try {
     const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
     await shell.openExternal(chatUrl);
-    return { success: true, imaged, pdfOpened };
+    return { success: true, imaged, pdfOpened, url: chatUrl };
   } catch (err) {
-    return { success: false, errorType: String((err && err.message) || err), imaged, pdfOpened };
+    try {
+      const fallbackUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+      await shell.openExternal(fallbackUrl);
+      return { success: true, imaged, pdfOpened, url: fallbackUrl, fallback: true };
+    } catch (err2) {
+      return { success: false, errorType: String((err2 && err2.message) || err2 || err), imaged, pdfOpened };
+    }
   }
 });
 

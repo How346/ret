@@ -353,7 +353,10 @@ export type Database = {
       }
       purchase_items: {
         Row: {
+          barcode: string | null
           cost: number
+          mrp: number
+          sale_price: number
           gst_amount: number
           gst_rate: number
           hsn_code: string | null
@@ -365,7 +368,10 @@ export type Database = {
           total: number
         }
         Insert: {
+          barcode?: string | null
           cost?: number
+          mrp?: number
+          sale_price?: number
           gst_amount?: number
           gst_rate?: number
           hsn_code?: string | null
@@ -377,7 +383,10 @@ export type Database = {
           total?: number
         }
         Update: {
+          barcode?: string | null
           cost?: number
+          mrp?: number
+          sale_price?: number
           gst_amount?: number
           gst_rate?: number
           hsn_code?: string | null

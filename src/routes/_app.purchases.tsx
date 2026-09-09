@@ -337,8 +337,8 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
         const line = q * c;
         const gstAmt = (line * g) / 100;
         return {
-          purchase_id: purch.id, product_id: i.product_id, product_name: i.product_name,
-          hsn_code: i.hsn_code || null, qty: q, cost: c, gst_rate: g,
+          purchase_id: purch.id, product_id: i.product_id, product_name: i.product_name, barcode: i.barcode || null,
+          hsn_code: i.hsn_code || null, qty: q, cost: c, mrp: Number(i.mrp)||0, sale_price: Number(i.sale_price)||0, gst_rate: g,
           gst_amount: gstAmt, total: line + gstAmt,
         };
       });
@@ -799,7 +799,8 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
   const [paymentMode, setPaymentMode] = useState("Cash");
   const [paid, setPaid] = useState("0");
   const [barcode, setBarcode] = useState("");
-  const [addQuery, setAddQuery] = useState("");
+  const [quickAdd, setQuickAdd] = useState<{ barcode: string } | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const barcodeRef = useRef<HTMLInputElement>(null);
   const cellRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const COLS = ["barcode", "hsn", "qty", "cost", "mrp", "sale", "gst"] as const;
@@ -813,7 +814,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
     },
   });
   const { data: products = [] } = useQuery({
-    queryKey: ["products", "edit-purchase"], queryFn: async () => {
+    queryKey: ["products-list"], staleTime: 60_000, queryFn: async () => {
       const { data } = await supabase.from("products").select("id,name,barcode,hsn_code,purchase_price,sale_price,mrp,gst_rate,stock").order("name");
       return (data ?? []) as Product[];
     },
@@ -825,9 +826,12 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
       if (he) { toast.error(he.message); return; }
       const { data: its, error: ie } = await supabase.from("purchase_items").select("*").eq("purchase_id", id);
       if (ie) { toast.error(ie.message); return; }
+      const ids = Array.from(new Set((its ?? []).map((r:any)=>r.product_id).filter(Boolean)));
+      const { data: masters } = ids.length ? await supabase.from("products").select("id,barcode,hsn_code,purchase_price,sale_price,mrp,gst_rate").in("id", ids) : { data: [] as any[] };
+      const masterMap = new Map((masters ?? []).map((m:any)=>[m.id,m]));
       setHead(h); setOriginalTotal(Number(h?.total ?? 0)); setBillNo(h?.bill_no ?? ""); setBillDate(h?.bill_date ?? "");
       setSupplierId(h?.supplier_id ?? ""); setPaymentMode(h?.payment_mode ?? "Cash"); setPaid(String(h?.paid ?? 0));
-      setItems((its ?? []).map((r: any) => ({ product_id:r.product_id, product_name:r.product_name ?? "", barcode:r.barcode ?? "", hsn_code:r.hsn_code ?? "", qty:String(r.qty ?? 1), cost:String(r.cost ?? 0), mrp:String(r.mrp ?? 0), sale_price:String(r.sale_price ?? 0), gst_rate:String(r.gst_rate ?? 0) })));
+      setItems((its ?? []).map((r: any) => { const m:any=masterMap.get(r.product_id) || {}; return { product_id:r.product_id, product_name:r.product_name ?? "", barcode:r.barcode ?? m.barcode ?? "", hsn_code:r.hsn_code ?? m.hsn_code ?? "", qty:String(r.qty ?? 1), cost:String(r.cost ?? m.purchase_price ?? 0), mrp:String(r.mrp ?? m.mrp ?? 0), sale_price:String(r.sale_price ?? m.sale_price ?? 0), gst_rate:String(r.gst_rate ?? m.gst_rate ?? 0) }; }));
       setTimeout(() => barcodeRef.current?.focus(), 80);
     })();
   }, [id]);
@@ -838,15 +842,14 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
     const existing = items.findIndex(x => x.product_id === p.id);
     if (existing >= 0) { upd(existing,{qty:String((Number(items[existing].qty)||0)+1)}); focusCell(existing,"qty"); return; }
     const row:LineItem={product_id:p.id,product_name:p.name,barcode:p.barcode??"",hsn_code:p.hsn_code??"",qty:"1",cost:String(p.purchase_price||0),mrp:String(p.mrp||0),sale_price:String(p.sale_price||0),gst_rate:String(p.gst_rate||0)};
-    setItems(a=>[...a,row]); setAddQuery(""); setTimeout(()=>focusCell(items.length,"hsn"),30);
+    const nextIndex = items.length; setItems(a=>[...a,row]); setTimeout(()=>focusCell(nextIndex,"hsn"),40);
   };
   const handleBarcode = (value:string) => {
     const q=value.trim(); if(!q)return;
     const p=products.find(x=>(x.barcode??"").trim().toLowerCase()===q.toLowerCase() || x.name.toLowerCase()===q.toLowerCase());
     if(p){ addProduct(p); setBarcode(""); return; }
-    toast.error("Product not found");
+    setQuickAdd({barcode:q}); setBarcode("");
   };
-  const filtered = useMemo(()=>{const q=addQuery.trim().toLowerCase(); if(!q)return []; return products.filter(p=>p.name.toLowerCase().includes(q)||(p.barcode??"").toLowerCase().includes(q)).slice(0,10)},[addQuery,products]);
   const totals=useMemo(()=>items.reduce((a,i)=>{const q=Number(i.qty)||0,c=Number(i.cost)||0,g=Number(i.gst_rate)||0;const line=q*c;a.sub+=line;a.tax+=line*g/100;return a},{sub:0,tax:0}),[items]);
   const total=totals.sub+totals.tax; const diff=total-originalTotal;
 
@@ -855,7 +858,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
     const {data:oldItems}=await supabase.from("purchase_items").select("*").eq("purchase_id",id);
     for(const oi of oldItems??[]){if(!oi.product_id)continue;const {data:p}=await supabase.from("products").select("stock").eq("id",oi.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)-Number(oi.qty)}).eq("id",oi.product_id);}
     await supabase.from("purchase_items").delete().eq("purchase_id",id);
-    const rows=valid.map(i=>{const q=Number(i.qty),c=Number(i.cost),g=Number(i.gst_rate),line=q*c;return {purchase_id:id,product_id:i.product_id,product_name:i.product_name,hsn_code:i.hsn_code||null,qty:q,cost:c,gst_rate:g,gst_amount:line*g/100,total:line*(1+g/100)};});
+    const rows=valid.map(i=>{const q=Number(i.qty),c=Number(i.cost),g=Number(i.gst_rate),line=q*c;return {purchase_id:id,product_id:i.product_id,product_name:i.product_name,barcode:i.barcode||null,hsn_code:i.hsn_code||null,qty:q,cost:c,mrp:Number(i.mrp)||0,sale_price:Number(i.sale_price)||0,gst_rate:g,gst_amount:line*g/100,total:line*(1+g/100)};});
     const {error:ie}=await supabase.from("purchase_items").insert(rows);if(ie)throw ie;
     for(const i of valid){if(!i.product_id)continue;const {data:p}=await supabase.from("products").select("stock").eq("id",i.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)+Number(i.qty),purchase_price:Number(i.cost)||0,mrp:Number(i.mrp)||p.mrp,sale_price:Number(i.sale_price)||p.sale_price}).eq("id",i.product_id);}
     const supplier=suppliers.find(s=>s.id===supplierId);
@@ -864,7 +867,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
   }catch(e:any){toast.error(e.message??"Failed to update purchase")}finally{setSaving(false)}};
 
   if(!head)return <Dialog open onOpenChange={onClose}><DialogContent>Loading…</DialogContent></Dialog>;
-  return <Dialog open onOpenChange={o=>!o&&onClose()}><DialogContent className="max-w-5xl max-h-[92vh] flex flex-col overflow-hidden" onKeyDown={e=>{if(e.key==="End"&&!saving){e.preventDefault();void save();}}}>
+  return <Dialog open onOpenChange={o=>!o&&onClose()}><DialogContent className="max-w-5xl max-h-[92vh] flex flex-col overflow-hidden" onKeyDown={e=>{if(e.key==="End"&&!saving){e.preventDefault();void save();} if((e.ctrlKey||e.metaKey)&&(e.key==="i"||e.key==="I")){e.preventDefault();setPickerOpen(true);}}}>
     <DialogHeader><DialogTitle>Edit Purchase Bill <span className="font-mono">{billNo}</span></DialogTitle></DialogHeader>
     <div className="flex-1 min-h-0 overflow-y-auto pr-1">
       <div className="grid gap-3 sm:grid-cols-4" data-enter-nav onKeyDown={onEnterFocusNext}>
@@ -872,13 +875,15 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
         <div><Label>Date</Label><Input type="date" value={billDate} onChange={e=>setBillDate(e.target.value)}/></div>
         <div className="sm:col-span-2"><Label>Supplier</Label><Select value={supplierId||"none"} onValueChange={v=>{setSupplierId(v==="none"?"":v);setTimeout(()=>barcodeRef.current?.focus(),30)}}><SelectTrigger><SelectValue placeholder="Select supplier"/></SelectTrigger><SelectContent><SelectItem value="none">None</SelectItem>{suppliers.map(s=><SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div>
       </div>
-      <div className="mt-3 rounded-md border border-primary/40 bg-primary/5 p-3"><div className="flex items-center justify-between gap-2"><Label className="text-xs uppercase tracking-wide flex items-center gap-1"><Scan className="h-3.5 w-3.5"/> Scan / Enter Barcode</Label><Button type="button" variant="outline" size="sm" className="h-6 text-xs px-2" onClick={()=>setAddQuery("")}>All items</Button></div><Input ref={barcodeRef} value={barcode} onChange={e=>setBarcode(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();handleBarcode(barcode)}}} placeholder="Scan barcode and press Enter" className="mt-1 font-mono"/></div>
+      <div className="mt-3 rounded-md border border-primary/40 bg-primary/5 p-3"><div className="flex items-center justify-between gap-2"><Label className="text-xs uppercase tracking-wide flex items-center gap-1"><Scan className="h-3.5 w-3.5"/> Scan / Enter Barcode</Label><Button type="button" variant="outline" size="sm" className="h-6 text-xs px-2" onClick={()=>setPickerOpen(true)}>All items</Button></div><Input ref={barcodeRef} value={barcode} onChange={e=>setBarcode(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();handleBarcode(barcode)}}} placeholder="Scan barcode and press Enter" className="mt-1 font-mono"/></div>
       <div className="border rounded-md overflow-x-auto mt-3"><Table><TableHeader><TableRow><TableHead className="w-[24%]">Product</TableHead><TableHead>Barcode</TableHead><TableHead>HSN</TableHead><TableHead>Qty</TableHead><TableHead>Cost</TableHead><TableHead>MRP</TableHead><TableHead>Sale ₹</TableHead><TableHead>GST%</TableHead><TableHead className="text-right">Amount</TableHead><TableHead/></TableRow></TableHeader><TableBody>{items.map((i,idx)=>{const q=Number(i.qty)||0,c=Number(i.cost)||0,g=Number(i.gst_rate)||0;return <TableRow key={`${i.product_id}-${idx}`}><TableCell className="font-medium">{i.product_name}</TableCell>{(["barcode","hsn","qty","cost","mrp","sale","gst"] as const).map(col=><TableCell key={col}><Input ref={setCell(idx,col)} value={(i as any)[col==="sale"?"sale_price":col]} onChange={e=>upd(idx,{[col==="sale"?"sale_price":col]:e.target.value} as any)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();const n=nextCol(col);if(n)focusCell(idx,n);else if(idx<items.length-1)focusCell(idx+1,"barcode");else{barcodeRef.current?.focus();barcodeRef.current?.select()}}}} className="h-7 text-xs"/></TableCell>)}<TableCell className="text-right font-mono">{inr(q*c*(1+g/100))}</TableCell><TableCell><Button size="icon" variant="ghost" onClick={()=>remove(idx)}><Trash2 className="h-4 w-4 text-destructive"/></Button></TableCell></TableRow>})}</TableBody></Table></div>
       <Button variant="outline" size="sm" className="mt-2 w-fit" onClick={()=>setItems(a=>[...a,emptyRow()])}><Plus className="h-4 w-4 mr-1"/> Add Row</Button>
-      <div className="relative mt-3"><Label className="text-xs">Add product</Label><Input value={addQuery} onChange={e=>setAddQuery(e.target.value)} placeholder="Search product or barcode…"/>{filtered.length>0&&<div className="absolute z-20 mt-1 w-full bg-popover border rounded shadow max-h-56 overflow-auto">{filtered.map(p=><button key={p.id} type="button" onClick={()=>addProduct(p)} className="w-full text-left p-2 hover:bg-accent text-sm flex justify-between"><span>{p.name}</span><span className="font-mono text-xs">{p.barcode??""}</span></button>)}</div>}</div>
       <div className="grid sm:grid-cols-3 gap-3 mt-3"><div><Label>Payment Mode</Label><Select value={paymentMode} onValueChange={setPaymentMode}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent><SelectItem value="Cash">Cash</SelectItem><SelectItem value="Bank">Bank</SelectItem><SelectItem value="UPI">UPI</SelectItem><SelectItem value="Credit">Credit</SelectItem></SelectContent></Select></div><div><Label>Paid</Label><Input inputMode="decimal" value={paid} onChange={e=>setPaid(e.target.value)}/></div><div className="rounded-md border p-3 bg-muted/30"><div className="flex justify-between text-sm"><span>Subtotal</span><span className="font-mono">{inr(totals.sub)}</span></div><div className="flex justify-between text-sm"><span>Tax</span><span className="font-mono">{inr(totals.tax)}</span></div><div className="flex justify-between font-bold mt-1"><span>New Total</span><span className="font-mono">{inr(total)}</span></div><div className={`flex justify-between text-sm mt-1 font-semibold ${diff===0?"text-muted-foreground":diff>0?"text-destructive":"text-emerald-600"}`}><span>Amount Difference</span><span className="font-mono">{diff>=0?"+":"−"}{inr(Math.abs(diff))}</span></div></div></div>
     </div>
-    <DialogFooter className="sm:justify-between border-t pt-3 mt-1 shrink-0 bg-background"><div className="text-xs text-muted-foreground">Same purchase-bill layout · Edit all fields · Amount Difference vs original bill</div><div className="flex gap-2"><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving?"Saving…":"Save Changes"}</Button></div></DialogFooter>
-  </DialogContent></Dialog>;
+    <DialogFooter className="sm:justify-between border-t pt-3 mt-1 shrink-0 bg-background"><div className="text-xs text-muted-foreground">Enter: Barcode → HSN → Qty → Cost → MRP → Sale → GST% · Ctrl+I = all products · End = Save</div><div className="flex gap-2"><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving?"Saving…":"Save Changes"}</Button></div></DialogFooter>
+  </DialogContent>
+  {quickAdd && <QuickAddProductDialog barcode={quickAdd.barcode} onClose={()=>{setQuickAdd(null);setTimeout(()=>barcodeRef.current?.focus(),30)}} onCreated={async(newId)=>{const {data}=await supabase.from("products").select("id,name,barcode,hsn_code,purchase_price,sale_price,mrp,gst_rate,stock").eq("id",newId).single(); if(data){addProduct(data as Product); setQuickAdd(null); setTimeout(()=>barcodeRef.current?.focus(),60);} else setQuickAdd(null);}} />}
+  <ProductPickerDialog open={pickerOpen} products={products} onClose={()=>{setPickerOpen(false);setTimeout(()=>barcodeRef.current?.focus(),30)}} onPick={p=>{addProduct(p);setPickerOpen(false);setTimeout(()=>barcodeRef.current?.focus(),60)}} />
+  </Dialog>;
 }
 

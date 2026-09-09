@@ -22,7 +22,9 @@ export function fillWhatsAppTemplate(
 export function normalizeWhatsAppPhone(raw: string, countryCode: string | null | undefined): string {
   const digits = String(raw || "").replace(/[^\d]/g, "");
   if (!digits) return "";
-  if (digits.length <= 10) return `${(countryCode || "91").replace(/[^\d]/g, "")}${digits}`;
+  if (digits.length === 10) return `${(countryCode || "91").replace(/[^\d]/g, "")}${digits}`;
+  if (digits.startsWith("00")) return digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) return `${(countryCode || "91").replace(/[^\d]/g, "")}${digits.slice(1)}`;
   return digits;
 }
 
@@ -131,7 +133,10 @@ export async function sendReceiptOnWhatsApp(opts: {
     }
   }
 
-  const digits = opts.phone.replace(/[^\d]/g, "");
+  let digits = opts.phone.replace(/[^\d]/g, "");
+  if (digits.length === 10) digits = `91${digits}`;
+  else if (digits.length === 11 && digits.startsWith("0")) digits = `91${digits.slice(1)}`;
+  else if (digits.startsWith("00")) digits = digits.slice(2);
   if (!digits) return { success: false, mode: "web-text-only", errorType: "missing-phone" };
   const url = `https://web.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(opts.message)}`;
   window.open(url, "_blank");
