@@ -680,7 +680,7 @@ function LicenseTab() {
               <Row2 label="Expires" value={formatLicenseDate(p.expiresAt)} />
               <Row2 label="Remaining" value={`${offlineLicense.daysLeft ?? 0} days`} />
               <Row2 label="Registered to" value={p.registeredTo || p.customerName || "—"} />
-              <Row2 label="Signature" value={offlineLicense?.timeSource === "server" ? "Verified · server time synced" : "Verified locally · offline time"} />
+              <Row2 label="Signature" value={"Verified"} />
             </div>
             <Button variant="outline" className="text-destructive" onClick={removeOfflineLicense}>Remove License</Button>
           </div>

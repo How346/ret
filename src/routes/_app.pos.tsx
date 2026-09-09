@@ -265,7 +265,7 @@ function POS() {
       return [...prev, { product_id: key, name, hsn_code: p.hsn_code, qty, price, gst_rate: p.gst_rate, discount: 0, mrp }];
     });
     setVariantAsk(null);
-    searchRef.current?.focus();
+    setTimeout(() => { searchRef.current?.focus(); searchRef.current?.select(); }, 50);
   };
 
   const onSearchEnter = async () => {
