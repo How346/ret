@@ -27,7 +27,6 @@ for (const dep of ['whatsapp-web.js', 'qrcode']) {
 }
 
 const ignore = [
-  /^\/node_modules($|\/)/,
   /^\/src($|\/)/,
   /^\/public($|\/)/,
   /^\/supabase($|\/)/,

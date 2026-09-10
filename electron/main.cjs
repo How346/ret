@@ -1,8 +1,4 @@
 const { app, BrowserWindow, shell, ipcMain, clipboard, nativeImage } = require("electron");
-let whatsappWebJs = null;
-let QRCode = null;
-try { whatsappWebJs = require("whatsapp-web.js"); } catch (error) { console.error("whatsapp-web.js is not installed in the packaged application:", error?.message || error); }
-try { QRCode = require("qrcode"); } catch (error) { console.error("qrcode is not installed in the packaged application:", error?.message || error); }
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -11,16 +7,25 @@ const { getHWID, readStoredLicenseAsync, installLicenseAsync, removeLicense } = 
 let mainWindow = null;
 
 // ---------------------------------------------------------------------------
-// Background WhatsApp client (whatsapp-web.js)
+// Background WhatsApp bill-image sender (whatsapp-web.js)
 // ---------------------------------------------------------------------------
 
 const WHATSAPP_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
+let whatsappWebJs = null;
+let QRCode = null;
 let whatsappClient = null;
 let whatsappReady = false;
 let whatsappQrDataUrl = null;
 let whatsappInitializing = false;
+let whatsappInitPromise = null;
+
+function loadWhatsAppDependencies() {
+  if (!whatsappWebJs) whatsappWebJs = require("whatsapp-web.js");
+  if (!QRCode) QRCode = require("qrcode");
+  return { whatsappWebJs, QRCode };
+}
 
 function sendWhatsAppEvent(channel, payload) {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -30,87 +35,109 @@ function sendWhatsAppEvent(channel, payload) {
 
 function cleanWhatsAppPhone(phone) {
   let clean = String(phone || "").replace(/[^\d]/g, "");
+  if (clean.startsWith("00")) clean = clean.slice(2);
   if (clean.length === 10) clean = `91${clean}`;
   if (clean.length === 11 && clean.startsWith("0")) clean = `91${clean.slice(1)}`;
-  if (clean.startsWith("00")) clean = clean.slice(2);
   return clean;
 }
 
-async function initializeWhatsApp() {
-  if (whatsappClient || whatsappInitializing) return;
-  if (!whatsappWebJs || !QRCode) {
-    sendWhatsAppEvent("whatsapp-error", { error: "WhatsApp background dependencies are missing. Rebuild the desktop app after installing dependencies." });
-    return;
-  }
-  const { Client, LocalAuth } = whatsappWebJs;
-  whatsappInitializing = true;
-  try {
-    whatsappClient = new Client({
-      authStrategy: new LocalAuth({
-        clientId: "margin-erp",
-        dataPath: path.join(app.getPath("userData"), "whatsapp-session"),
-      }),
-      puppeteer: {
-        headless: true,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          `--user-agent=${WHATSAPP_USER_AGENT}`,
-        ],
-      },
-    });
-
-    whatsappClient.on("qr", async (qr) => {
-      whatsappReady = false;
-      try {
-        whatsappQrDataUrl = await QRCode.toDataURL(qr, { margin: 1, width: 320 });
-        sendWhatsAppEvent("whatsapp-qr", whatsappQrDataUrl);
-      } catch (error) {
-        sendWhatsAppEvent("whatsapp-error", { error: String(error?.message || error) });
-      }
-    });
-
-    whatsappClient.on("ready", () => {
-      whatsappReady = true;
-      whatsappQrDataUrl = null;
-      sendWhatsAppEvent("whatsapp-ready", { ready: true });
-    });
-
-    whatsappClient.on("authenticated", () => {
-      sendWhatsAppEvent("whatsapp-authenticated", { authenticated: true });
-    });
-
-    whatsappClient.on("auth_failure", (message) => {
-      whatsappReady = false;
-      sendWhatsAppEvent("whatsapp-error", { error: String(message || "Authentication failed") });
-    });
-
-    whatsappClient.on("disconnected", (reason) => {
-      whatsappReady = false;
-      sendWhatsAppEvent("whatsapp-disconnected", { reason: String(reason || "Disconnected") });
-      whatsappClient = null;
-      whatsappInitializing = false;
-    });
-
-    whatsappClient.on("change_state", (state) => {
-      sendWhatsAppEvent("whatsapp-state", { state });
-    });
-
-    await whatsappClient.initialize();
-  } catch (error) {
-    whatsappClient = null;
-    sendWhatsAppEvent("whatsapp-error", { error: String(error?.message || error) });
-  } finally {
-    whatsappInitializing = false;
-  }
+function whatsappErrorMessage(error) {
+  return String(error?.message || error || "Unknown WhatsApp error");
 }
 
-ipcMain.handle("whatsapp:initialize", async () => {
-  await initializeWhatsApp();
-  return { ready: whatsappReady, qr: whatsappQrDataUrl };
-});
+async function initializeWhatsApp() {
+  if (whatsappReady && whatsappClient) return { ready: true, qr: null };
+  if (whatsappInitPromise) return whatsappInitPromise;
+
+  whatsappInitPromise = (async () => {
+    try {
+      const { Client, LocalAuth } = loadWhatsAppDependencies();
+      whatsappInitializing = true;
+      whatsappQrDataUrl = null;
+
+      const sessionPath = path.join(app.getPath("userData"), "whatsapp-session");
+
+      whatsappClient = new Client({
+        authStrategy: new LocalAuth({
+          clientId: "margin-erp",
+          dataPath: sessionPath,
+        }),
+        puppeteer: {
+          headless: true,
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            `--user-agent=${WHATSAPP_USER_AGENT}`,
+          ],
+        },
+      });
+
+      whatsappClient.on("qr", async (qr) => {
+        whatsappReady = false;
+        try {
+          whatsappQrDataUrl = await QRCode.toDataURL(qr, {
+            margin: 1,
+            width: 320,
+            errorCorrectionLevel: "M",
+          });
+          sendWhatsAppEvent("whatsapp-qr", whatsappQrDataUrl);
+        } catch (error) {
+          sendWhatsAppEvent("whatsapp-error", { error: whatsappErrorMessage(error) });
+        }
+      });
+
+      whatsappClient.on("authenticated", () => {
+        sendWhatsAppEvent("whatsapp-authenticated", { authenticated: true });
+      });
+
+      whatsappClient.on("ready", () => {
+        whatsappReady = true;
+        whatsappQrDataUrl = null;
+        sendWhatsAppEvent("whatsapp-ready", { ready: true });
+      });
+
+      whatsappClient.on("auth_failure", (message) => {
+        whatsappReady = false;
+        whatsappQrDataUrl = null;
+        sendWhatsAppEvent("whatsapp-error", {
+          error: `WhatsApp authentication failed: ${String(message || "Unknown authentication failure")}`,
+        });
+      });
+
+      whatsappClient.on("disconnected", (reason) => {
+        whatsappReady = false;
+        whatsappQrDataUrl = null;
+        sendWhatsAppEvent("whatsapp-disconnected", { reason: String(reason || "Disconnected") });
+        try { whatsappClient?.destroy(); } catch { /* ignore */ }
+        whatsappClient = null;
+      });
+
+      whatsappClient.on("change_state", (state) => {
+        sendWhatsAppEvent("whatsapp-state", { state: String(state || "") });
+      });
+
+      await whatsappClient.initialize();
+      return { ready: whatsappReady, qr: whatsappQrDataUrl };
+    } catch (error) {
+      whatsappReady = false;
+      whatsappQrDataUrl = null;
+      try { await whatsappClient?.destroy(); } catch { /* ignore */ }
+      whatsappClient = null;
+      const message = whatsappErrorMessage(error);
+      sendWhatsAppEvent("whatsapp-error", { error: message });
+      return { ready: false, qr: null, error: message };
+    } finally {
+      whatsappInitializing = false;
+      whatsappInitPromise = null;
+    }
+  })();
+
+  return whatsappInitPromise;
+}
+
+ipcMain.handle("whatsapp:initialize", async () => initializeWhatsApp());
 
 ipcMain.handle("whatsapp:status", async () => ({
   ready: whatsappReady,
@@ -118,30 +145,53 @@ ipcMain.handle("whatsapp:status", async () => ({
   initializing: whatsappInitializing,
 }));
 
+// Send ONLY the bill image. The image never has to be written to disk.
 ipcMain.handle("send-bill-image", async (_event, payload) => {
   try {
-    const base64Image = String(payload?.base64Image || "").replace(/^data:image\/png;base64,/, "");
+    const { MessageMedia } = loadWhatsAppDependencies();
+    const raw = String(payload?.base64Image || "").trim();
+    const base64Image = raw.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
     const phone = cleanWhatsAppPhone(payload?.phone);
-    const message = String(payload?.message || "");
-    if (!base64Image) return { success: false, errorType: "missing-image" };
-    if (!phone) return { success: false, errorType: "missing-phone" };
 
-    await initializeWhatsApp();
+    if (!base64Image) return { success: false, errorType: "Bill image is empty." };
+    if (!phone) return { success: false, errorType: "WhatsApp number is empty or invalid." };
+    if (!/^[1-9]\d{7,14}$/.test(phone)) {
+      return { success: false, errorType: "WhatsApp number must include a valid country code." };
+    }
+
     if (!whatsappClient || !whatsappReady) {
-      return { success: false, errorType: "whatsapp-not-ready", qr: whatsappQrDataUrl };
+      const status = await initializeWhatsApp();
+      if (!status.ready || !whatsappClient || !whatsappReady) {
+        return {
+          success: false,
+          errorType: status.error || "WhatsApp is not connected. Scan the QR code in Settings → WhatsApp first.",
+          qr: whatsappQrDataUrl,
+        };
+      }
     }
 
     const chatId = `${phone}@c.us`;
-    if (!whatsappWebJs) return { success: false, errorType: "whatsapp-web.js is not installed" };
-    const { MessageMedia } = whatsappWebJs;
     const media = new MessageMedia("image/png", base64Image, "bill.png");
-    await whatsappClient.sendMessage(chatId, media, { caption: message });
-    return { success: true };
+
+    // Verify the destination before sending. This avoids reporting success for
+    // a number that is not a WhatsApp account.
+    let numberId = null;
+    try {
+      numberId = await whatsappClient.getNumberId(phone);
+    } catch {
+      numberId = null;
+    }
+    if (!numberId) {
+      return { success: false, errorType: "This number is not available on WhatsApp." };
+    }
+
+    // Deliberately send no caption/text: the requested output is only the bill image.
+    await whatsappClient.sendMessage(chatId, media);
+    return { success: true, phone };
   } catch (error) {
-    return { success: false, errorType: String(error?.message || error) };
+    return { success: false, errorType: whatsappErrorMessage(error) };
   }
 });
-
 
 // ---------------------------------------------------------------------------
 // Offline signed licensing

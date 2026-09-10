@@ -22,7 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useStoreSettings } from "@/hooks/use-store-settings";
 import { printReceipt, buildReceiptHtml } from "@/lib/print-receipt";
-import { sendReceiptOnWhatsApp, fillWhatsAppTemplate, normalizeWhatsAppPhone, openWhatsAppWeb } from "@/lib/whatsapp-send";
+import { sendReceiptOnWhatsApp, fillWhatsAppTemplate, normalizeWhatsAppPhone } from "@/lib/whatsapp-send";
 import { MessageCircle, LayoutGrid } from "lucide-react";
 import { onEnterFocusNext } from "@/lib/keyboard-nav";
 import { invalidateReports } from "@/lib/report-invalidate";
@@ -1309,110 +1309,65 @@ function WhatsAppSendDialog({
 }) {
   const [phone, setPhone] = useState("");
   const [sending, setSending] = useState(false);
-  const [connecting, setConnecting] = useState(false);
   useEffect(() => { setPhone(ask?.phone ?? ""); }, [ask]);
 
+  const send = async () => {
+    if (!ask || !phone.trim() || sending) return;
+    setSending(true);
+    try {
+      const res = await sendReceiptOnWhatsApp({
+        html: ask.html,
+        phone,
+        paperSize,
+      });
+      if (res.success) {
+        toast.success("Bill image sent to WhatsApp");
+        onClose();
+      } else {
+        toast.error(res.errorType || "WhatsApp could not send the bill image");
+      }
+    } catch (error: any) {
+      toast.error(String(error?.message || error || "WhatsApp sending failed"));
+    } finally {
+      setSending(false);
+    }
+  };
+
   return (
-    <Dialog open={!!ask} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={!!ask} onOpenChange={(o) => { if (!o && !sending) onClose(); }}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle className="font-display flex items-center gap-2">
-            <MessageCircle className="h-4 w-4" /> Send bill on WhatsApp
+            <MessageCircle className="h-4 w-4" /> Send bill image on WhatsApp
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            disabled={connecting}
-            onClick={async () => {
-              setConnecting(true);
-              try {
-                const res = await openWhatsAppWeb();
-                if (!res.success) toast.error("Couldn't open WhatsApp Web");
-              } finally {
-                setConnecting(false);
-              }
-            }}
-          >
-            {connecting && <Loader2 className="h-4 w-4 animate-spin" />}
-            Open WhatsApp Web in browser (scan QR / login)
-          </Button>
           <div>
             <Label>WhatsApp number</Label>
             <Input
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key !== "Enter" || e.isComposing) return;
-                e.preventDefault();
-                e.stopPropagation();
-                if (!phone.trim() || sending || !ask) return;
-                setSending(true);
-                void (async () => {
-                  try {
-                    const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
-                    if (res.success) {
-                      if (res.mode === "desktop-browser" && res.imaged === false) {
-                        toast.warning(res.pdfOpened
-                          ? "Bill image could not be copied. A PDF fallback was opened — attach it in WhatsApp."
-                          : "Bill image could not be copied. Please try again or use Print.");
-                      } else {
-                        toast.success(res.mode === "desktop-browser"
-                          ? "Bill image copied — paste with Ctrl+V in WhatsApp and press Send"
-                          : "WhatsApp opened");
-                      }
-                    } else {
-                      toast.error("Could not open WhatsApp — check the number and try again");
-                    }
-                  } finally {
-                    setSending(false);
-                    onClose();
-                  }
-                })();
+                if (e.key === "Enter" && !e.isComposing) {
+                  e.preventDefault();
+                  void send();
+                }
               }}
               placeholder="10-digit mobile number"
               autoFocus
               inputMode="tel"
+              disabled={sending}
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            First time only: log in above by scanning the QR code in your browser. After that, "Send"
-            will open the customer's chat in your default browser with the bill image copied to your
-            clipboard — just paste (Ctrl+V) it into the chat and press send.
+            The bill is rendered directly in memory and sent as a PNG image. No bill image file is created and no browser window is opened.
           </p>
         </div>
         <DialogFooter>
-          <Button variant="outline" disabled={sending} onClick={onClose}>Skip</Button>
-          <Button
-            disabled={!phone.trim() || sending}
-            onClick={async () => {
-              if (!ask) return;
-              setSending(true);
-              try {
-                const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
-                if (res.success) {
-                  if (res.mode === "desktop-browser" && res.imaged === false) {
-                    toast.warning(res.pdfOpened
-                      ? "Bill image could not be copied. A PDF fallback was opened — attach it in WhatsApp."
-                      : "Bill image could not be copied. Please try again or use Print.");
-                  } else {
-                    toast.success(res.mode === "desktop-browser"
-                      ? "WhatsApp Web opened — paste the bill image (Ctrl+V) and press Send"
-                      : "WhatsApp opened");
-                  }
-                } else {
-                  toast.error("Couldn't open WhatsApp — check the number and try again");
-                }
-              } finally {
-                setSending(false);
-                onClose();
-              }
-            }}
-          >
+          <Button variant="outline" disabled={sending} onClick={onClose}>Cancel</Button>
+          <Button disabled={!phone.trim() || sending} onClick={() => void send()}>
             {sending && <Loader2 className="h-4 w-4 animate-spin" />}
-            {sending ? "Preparing bill…" : "Copy Bill Image & Open WhatsApp"}
+            {sending ? "Sending image…" : "Send Bill Image"}
           </Button>
         </DialogFooter>
       </DialogContent>

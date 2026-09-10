@@ -24,7 +24,6 @@ import {
   setSilentPrint,
   type PrinterInfo,
 } from "@/lib/printer-prefs";
-import { openWhatsAppWeb } from "@/lib/whatsapp-send";
 import { WhatsAppQrPanel } from "@/components/whatsapp-qr-panel";
 import { backupSupported, pickBackupFolder, getSavedFolder, forgetFolder, runBackup, restoreBackup } from "@/lib/local-backup";
 import { useMyLicense, licenseStatus, redeemLicenseKey } from "@/hooks/use-license";
