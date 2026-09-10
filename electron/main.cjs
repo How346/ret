@@ -1,12 +1,10 @@
 const { app, BrowserWindow, shell, ipcMain, clipboard, nativeImage } = require("electron");
-const { execFile } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
 const { getHWID, readStoredLicenseAsync, installLicenseAsync, removeLicense } = require("./license.cjs");
 
 let mainWindow = null;
-let whatsappWindow = null;
 
 // ---------------------------------------------------------------------------
 // Offline signed licensing
@@ -274,60 +272,22 @@ async function createBillPdf(html, widthPx) {
   }
 }
 
-// WhatsApp launcher. Prefer the installed WhatsApp Desktop protocol on
-// Windows, then fall back to the normal browser. This avoids depending on
-// Electron's shell URL association, which can silently fail in packaged EXEs.
-async function launchWindowsUrl(url) {
-  if (process.platform !== "win32") { await shell.openExternal(url); return; }
-  await new Promise((resolve, reject) => {
-    execFile("cmd.exe", ["/c", "start", "", url], { windowsHide: true }, error => error ? reject(error) : resolve());
-  });
-}
-
+// Opens WhatsApp Web in the user's own default browser so they can log in
+// (scan the QR code) there — exactly like opening web.whatsapp.com in a
+// normal browser tab. Whichever browser is set as default on this PC is
+// used; Electron does not embed or control it.
 ipcMain.handle("whatsapp:open-web", async () => {
   try {
-    await launchWindowsUrl("https://web.whatsapp.com/");
-    return { success: true, mode: "desktop-browser" };
+    await shell.openExternal("https://web.whatsapp.com/");
+    return { success: true };
   } catch (err) {
-    try { await shell.openExternal("https://web.whatsapp.com/"); return { success: true, mode: "desktop-browser" }; }
-    catch (e) { return { success: false, errorType: String(e?.message || err?.message || err) }; }
+    return { success: false, errorType: String((err && err.message) || err) };
   }
 });
 
-async function openWhatsAppChat(phone, message = "") {
-  let digits = String(phone || "").replace(/\D/g, "");
-  if (digits.length === 10) digits = `91${digits}`;
-  else if (digits.length === 11 && digits.startsWith("0")) digits = `91${digits.slice(1)}`;
-  else if (digits.startsWith("00")) digits = digits.slice(2);
-  if (!digits) return { success: false, errorType: "missing-phone" };
-  const text = encodeURIComponent(String(message || ""));
-
-  // 1) Installed WhatsApp Desktop, when registered on Windows.
-  const appUrl = `whatsapp://send?phone=${digits}&text=${text}`;
-  try {
-    await launchWindowsUrl(appUrl);
-    return { success: true, mode: "desktop-app", url: appUrl };
-  } catch { /* no desktop protocol; continue */ }
-
-  // 2) Browser click-to-chat. Use the Windows shell directly rather than
-  // relying on Electron's URL association handling.
-  const webUrl = `https://web.whatsapp.com/send?phone=${digits}&text=${text}`;
-  try {
-    await launchWindowsUrl(webUrl);
-    return { success: true, mode: "desktop-browser", url: webUrl };
-  } catch {
-    try {
-      await shell.openExternal(webUrl);
-      return { success: true, mode: "desktop-browser", url: webUrl };
-    } catch (err) {
-      return { success: false, errorType: String(err?.message || "Could not launch WhatsApp") };
-    }
-  }
-}
-
 // Captures the bill as an image (copied to clipboard), then opens the
-// customer's WhatsApp chat using WhatsApp Desktop when available, otherwise
-// a dedicated WhatsApp Web window inside the app.
+// customer's WhatsApp Web chat in the user's default browser with the
+// message pre-filled, ready for the cashier to paste the image and send.
 ipcMain.handle("whatsapp:send-image", async (_event, payload) => {
   const imageDataUrl = String((payload && payload.imageDataUrl) || "");
   let phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");
@@ -339,24 +299,62 @@ ipcMain.handle("whatsapp:send-image", async (_event, payload) => {
   const widthPx = Math.max(280, Math.min(1200, Number(payload && payload.widthPx) || 380));
 
   if (!phone) return { success: false, errorType: "missing-phone" };
-  if (!imageDataUrl.startsWith("data:image/")) return { success: false, errorType: "invalid-image-data" };
 
+  // An empty/invalid image isn't fatal — it just means the clipboard step is
+  // skipped and we fall through to the PDF fallback below, so the cashier
+  // still gets something usable instead of nothing at all.
   let imaged = false;
-  try {
-    const image = nativeImage.createFromDataURL(imageDataUrl);
-    if (!image.isEmpty()) {
-      clipboard.writeImage(image);
-      imaged = !clipboard.readImage().isEmpty();
+  let tmpPngFile = null;
+  if (imageDataUrl.startsWith("data:image/")) {
+    try {
+      const image = nativeImage.createFromDataURL(imageDataUrl);
+      if (!image.isEmpty()) {
+        clipboard.writeImage(image);
+        imaged = !clipboard.readImage().isEmpty();
+
+        // Windows fallback: some PCs have Chromium/Electron's clipboard
+        // bridge blocked by another clipboard manager/driver, even though
+        // the image itself decoded fine. Writing the bitmap directly via
+        // .NET's clipboard API sidesteps that.
+        if (!imaged && process.platform === "win32") {
+          try {
+            tmpPngFile = path.join(os.tmpdir(), `margin-erp-wa-img-${Date.now()}.png`);
+            fs.writeFileSync(tmpPngFile, image.toPNG());
+            const { spawnSync } = require("node:child_process");
+            const psPath = tmpPngFile.replace(/'/g, "''");
+            const command = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img=[System.Drawing.Image]::FromFile('${psPath}'); try { [System.Windows.Forms.Clipboard]::SetImage($img) } finally { $img.Dispose() }`;
+            const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", command], { windowsHide: true, timeout: 10000 });
+            if (result.status === 0) imaged = true;
+          } catch {
+            /* fall through to PDF */
+          }
+        }
+      }
+    } catch {
+      imaged = false;
+    } finally {
+      try { if (tmpPngFile && fs.existsSync(tmpPngFile)) fs.unlinkSync(tmpPngFile); } catch { /* ignore */ }
     }
-  } catch {
-    imaged = false;
   }
 
   let pdfOpened = false;
   if (!imaged && html) pdfOpened = !!(await createBillPdf(html, widthPx));
 
-  const opened = await openWhatsAppChat(phone, message);
-  return { ...opened, imaged, pdfOpened };
+  // wa.me is the most reliable external hand-off: the user's default browser
+  // resolves it to WhatsApp Web/Desktop depending on their setup.
+  try {
+    const chatUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+    await shell.openExternal(chatUrl);
+    return { success: true, imaged, pdfOpened, url: chatUrl };
+  } catch (err) {
+    try {
+      const fallbackUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
+      await shell.openExternal(fallbackUrl);
+      return { success: true, imaged, pdfOpened, url: fallbackUrl, fallback: true };
+    } catch (err2) {
+      return { success: false, errorType: String((err2 && err2.message) || err2 || err), imaged, pdfOpened };
+    }
+  }
 });
 
 ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
@@ -377,6 +375,11 @@ ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
     pdfOpened = !!(await createBillPdf(html, widthPx));
   }
 
-  const opened = await openWhatsAppChat(phone, message);
-  return { ...opened, imaged, pdfOpened };
+  try {
+    const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
+    await shell.openExternal(chatUrl);
+    return { success: true, imaged, pdfOpened };
+  } catch (err) {
+    return { success: false, errorType: String((err && err.message) || err), imaged, pdfOpened };
+  }
 });

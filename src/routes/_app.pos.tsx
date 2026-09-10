@@ -25,6 +25,7 @@ import { printReceipt, buildReceiptHtml } from "@/lib/print-receipt";
 import { sendReceiptOnWhatsApp, fillWhatsAppTemplate, normalizeWhatsAppPhone, openWhatsAppWeb } from "@/lib/whatsapp-send";
 import { MessageCircle, LayoutGrid } from "lucide-react";
 import { onEnterFocusNext } from "@/lib/keyboard-nav";
+import { invalidateReports } from "@/lib/report-invalidate";
 import {
   getActiveLayout, setActiveLayout, listTemplates, saveTemplate, deleteTemplate, applyTemplate,
   DEFAULT_POS_LAYOUT, POS_PRESETS, type PosLayoutConfig,
@@ -787,7 +788,8 @@ function POS() {
             }
 
             toast.success(`Invoice ${invNo} saved`);
-            qc.invalidateQueries();
+            qc.invalidateQueries({ queryKey: ["products", "pos"] });
+            invalidateReports(qc);
             setPayOpen(false);
             clearBill();
             const customer = customers.find((c: any) => c.id === customerId) ?? null;
@@ -1349,26 +1351,24 @@ function WhatsAppSendDialog({
                 if (!phone.trim() || sending || !ask) return;
                 setSending(true);
                 void (async () => {
-                  let result: Awaited<ReturnType<typeof sendReceiptOnWhatsApp>> | null = null;
                   try {
                     const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
-                    result = res;
                     if (res.success) {
-                      if (res.imaged === false) {
+                      if (res.mode === "desktop-browser" && res.imaged === false) {
                         toast.warning(res.pdfOpened
                           ? "Bill image could not be copied. A PDF fallback was opened — attach it in WhatsApp."
                           : "Bill image could not be copied. Please try again or use Print.");
                       } else {
-                        toast.success(res.mode !== "web-text-only"
+                        toast.success(res.mode === "desktop-browser"
                           ? "Bill image copied — paste with Ctrl+V in WhatsApp and press Send"
                           : "WhatsApp opened");
                       }
                     } else {
-                      toast.error(`Could not open WhatsApp${res.errorType ? `: ${res.errorType}` : ""}`);
+                      toast.error("Could not open WhatsApp — check the number and try again");
                     }
                   } finally {
                     setSending(false);
-                    if (result?.success) onClose();
+                    onClose();
                   }
                 })();
               }}
@@ -1393,21 +1393,21 @@ function WhatsAppSendDialog({
               try {
                 const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
                 if (res.success) {
-                  if (res.imaged === false) {
+                  if (res.mode === "desktop-browser" && res.imaged === false) {
                     toast.warning(res.pdfOpened
                       ? "Bill image could not be copied. A PDF fallback was opened — attach it in WhatsApp."
                       : "Bill image could not be copied. Please try again or use Print.");
                   } else {
-                    toast.success(res.mode !== "web-text-only"
-                      ? "WhatsApp opened — paste the bill image (Ctrl+V) and press Send"
+                    toast.success(res.mode === "desktop-browser"
+                      ? "WhatsApp Web opened — paste the bill image (Ctrl+V) and press Send"
                       : "WhatsApp opened");
                   }
                 } else {
-                  toast.error(`Couldn't open WhatsApp${res.errorType ? `: ${res.errorType}` : ""}`);
+                  toast.error("Couldn't open WhatsApp — check the number and try again");
                 }
-                if (res?.success) onClose();
               } finally {
                 setSending(false);
+                onClose();
               }
             }}
           >

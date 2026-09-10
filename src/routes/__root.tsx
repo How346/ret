@@ -6,6 +6,7 @@ import {
 import appCss from "../styles.css?url";
 import { AuthProvider } from "@/hooks/use-auth";
 import { Toaster } from "@/components/ui/sonner";
+import { useBodyPointerEventsFix } from "@/lib/use-body-pointer-events-fix";
 
 const IS_DESKTOP = import.meta.env.VITE_DESKTOP === "true";
 
@@ -74,6 +75,7 @@ function RootShell({ children }: { children: React.ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  useBodyPointerEventsFix();
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>

@@ -10,18 +10,10 @@ export const Route = createFileRoute("/_app/dashboard")({ component: Dashboard }
 function Dashboard() {
   const { data } = useQuery({
     queryKey: ["dashboard"],
-    staleTime: 0, refetchOnMount: "always", refetchOnWindowFocus: true,
     queryFn: async () => {
-      // Business day = Asia/Kolkata, not the machine/UTC day.
-      const now = new Date();
-      const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-      const yyyy = istNow.getFullYear();
-      const mm = String(istNow.getMonth()+1).padStart(2,"0");
-      const dd = String(istNow.getDate()).padStart(2,"0");
-      const today = new Date(`${yyyy}-${mm}-${dd}T00:00:00+05:30`);
-      const tomorrow = new Date(`${yyyy}-${mm}-${dd}T00:00:00+05:30`); tomorrow.setUTCDate(tomorrow.getUTCDate()+1);
+      const today = new Date(); today.setHours(0,0,0,0);
       const [sales, products] = await Promise.all([
-        supabase.from("sales").select("total,created_at").gte("created_at", today.toISOString()).lt("created_at", tomorrow.toISOString()),
+        supabase.from("sales").select("total,created_at").gte("created_at", today.toISOString()),
         supabase.from("products").select("stock,low_stock_alert,sale_price"),
       ]);
       const todayTotal = (sales.data ?? []).reduce((s, x) => s + Number(x.total), 0);

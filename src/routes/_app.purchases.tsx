@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { inr } from "@/lib/format";
 import { onEnterFocusNext } from "@/lib/keyboard-nav";
 import { formatIndianDate } from "@/lib/date-format";
+import { invalidateReports } from "@/lib/report-invalidate";
 
 type Supplier = { id: string; name: string };
 type Product = {
@@ -65,14 +66,15 @@ function PurchasesPage() {
         if (it.product_id) {
           const { data: p } = await supabase.from("products").select("stock").eq("id", it.product_id).single();
           if (p) await supabase.from("products").update({ stock: Number(p.stock) - Number(it.qty) }).eq("id", it.product_id);
-          await supabase.from("stock_ledger").insert({ product_id: it.product_id, change: -Number(it.qty), reason: "purchase_void", ref_id: id });
         }
       }
       const { error } = await supabase.from("purchases").delete().eq("id", id);
       if (error) throw error;
     },
     onSuccess: () => {
-      qc.invalidateQueries();
+      qc.invalidateQueries({ queryKey: ["purchases"] });
+      qc.invalidateQueries({ queryKey: ["products"] });
+      invalidateReports(qc);
       toast.success("Purchase removed and stock adjusted");
     },
     onError: (e: any) => toast.error(e.message),
@@ -407,7 +409,10 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
 
     },
     onSuccess: () => {
-      qc.invalidateQueries();
+      qc.invalidateQueries({ queryKey: ["purchases"] });
+      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["variants-all"] });
+      invalidateReports(qc);
       toast.success("Purchase saved · Stock updated");
       onClose();
     },
@@ -753,11 +758,7 @@ function ViewPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
     queryFn: async () => {
       const { data: head } = await supabase.from("purchases").select("*").eq("id", id).single();
       const { data: items } = await supabase.from("purchase_items").select("*").eq("purchase_id", id);
-      const ids = Array.from(new Set((items ?? []).map((r:any)=>r.product_id).filter(Boolean)));
-      const { data: masters } = ids.length ? await supabase.from("products").select("id,gst_rate").in("id", ids) : { data: [] as any[] };
-      const gm = new Map((masters ?? []).map((m:any)=>[m.id, Number(m.gst_rate)||0]));
-      const normalized = (items ?? []).map((r:any)=>({ ...r, gst_rate: (r.gst_rate == null || Number(r.gst_rate) === 0) ? (gm.get(r.product_id) ?? 0) : Number(r.gst_rate) }));
-      return { head, items: normalized };
+      return { head, items: items ?? [] };
     },
   });
   return (
@@ -831,7 +832,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
   const nextCol = (col: string) => COLS[COLS.indexOf(col as any) + 1];
 
   const { data: suppliers = [] } = useQuery({
-    queryKey: ["suppliers-list"], staleTime: 60_000, queryFn: async () => {
+    queryKey: ["suppliers-list"], queryFn: async () => {
       const { data } = await supabase.from("suppliers").select("id,name").order("name"); return (data ?? []) as Supplier[];
     },
   });
@@ -856,32 +857,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
       const masterMap = new Map((masters ?? []).map((m:any)=>[m.id,m]));
       setHead(h); setOriginalTotal(Number(h?.total ?? 0)); setBillNo(h?.bill_no ?? ""); setBillDate(h?.bill_date ?? "");
       setSupplierId(h?.supplier_id ?? ""); setPaymentMode(h?.payment_mode ?? "Cash"); setPaid(String(h?.paid ?? 0));
-      const loaded = (its ?? []).map((r: any) => {
-        const m:any=masterMap.get(r.product_id) || {};
-        const storedGst=Number(r.gst_rate);
-        const masterGst=Number(m.gst_rate);
-        const storedCost=Number(r.cost);
-        const masterCost=Number(m.purchase_price);
-        return {
-          product_id:r.product_id, product_name:r.product_name ?? "",
-          barcode:r.barcode ?? m.barcode ?? "", hsn_code:r.hsn_code ?? m.hsn_code ?? "",
-          qty:String(r.qty ?? 1),
-          cost:String(Number.isFinite(storedCost) && storedCost > 0 ? storedCost : (masterCost || 0)),
-          mrp:String(Number(r.mrp) > 0 ? r.mrp : (Number(m.mrp) || 0)),
-          sale_price:String(Number(r.sale_price) > 0 ? r.sale_price : (Number(m.sale_price) || 0)),
-          gst_rate:String((r.gst_rate === null || r.gst_rate === undefined || storedGst === 0) && masterGst > 0 ? masterGst : (Number.isFinite(storedGst) ? storedGst : masterGst)),
-        };
-      });
-      // Repair old duplicate rows on load: one product = one row, Qty carries
-      // the combined quantity. This also makes edit calculations deterministic.
-      const merged:LineItem[]=[]; const byPid=new Map<string,LineItem>();
-      for(const row of loaded){
-        const pid=String(row.product_id||"");
-        if(pid && byPid.has(pid)){
-          const ex=byPid.get(pid)!; ex.qty=String((Number(ex.qty)||0)+(Number(row.qty)||0));
-        } else { if(pid) byPid.set(pid,row); merged.push(row); }
-      }
-      setItems(merged);
+      setItems((its ?? []).map((r: any) => { const m:any=masterMap.get(r.product_id) || {}; return { product_id:r.product_id, product_name:r.product_name ?? "", barcode:r.barcode ?? m.barcode ?? "", hsn_code:r.hsn_code ?? m.hsn_code ?? "", qty:String(r.qty ?? 1), cost:String(r.cost ?? m.purchase_price ?? 0), mrp:String(r.mrp ?? m.mrp ?? 0), sale_price:String(r.sale_price ?? m.sale_price ?? 0), gst_rate:String(r.gst_rate ?? m.gst_rate ?? 0) }; }));
       setTimeout(() => barcodeRef.current?.focus(), 80);
     })();
   }, [id]);
@@ -889,19 +865,10 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
   const upd = (idx:number, patch:Partial<LineItem>) => setItems(a => a.map((x,i)=>i===idx?{...x,...patch}:x));
   const remove = (idx:number) => setItems(a => a.filter((_,i)=>i!==idx));
   const addProduct = (p: Product) => {
-    let targetIndex = -1;
-    let wasExisting = false;
-    setItems(arr => {
-      const existing = arr.findIndex(x => x.product_id === p.id);
-      if (existing >= 0) {
-        targetIndex = existing; wasExisting = true;
-        return arr.map((x,i) => i === existing ? { ...x, qty: String((Number(x.qty)||0) + 1) } : x);
-      }
-      const row:LineItem={product_id:p.id,product_name:p.name,barcode:p.barcode??"",hsn_code:p.hsn_code??"",qty:"1",cost:String(p.purchase_price||0),mrp:String(p.mrp||0),sale_price:String(p.sale_price||0),gst_rate:String(p.gst_rate||0)};
-      targetIndex = arr.length;
-      return [...arr,row];
-    });
-    setTimeout(() => focusCell(targetIndex, wasExisting ? "qty" : "hsn"), 40);
+    const existing = items.findIndex(x => x.product_id === p.id);
+    if (existing >= 0) { upd(existing,{qty:String((Number(items[existing].qty)||0)+1)}); focusCell(existing,"qty"); return; }
+    const row:LineItem={product_id:p.id,product_name:p.name,barcode:p.barcode??"",hsn_code:p.hsn_code??"",qty:"1",cost:String(p.purchase_price||0),mrp:String(p.mrp||0),sale_price:String(p.sale_price||0),gst_rate:String(p.gst_rate||0)};
+    const nextIndex = items.length; setItems(a=>[...a,row]); setTimeout(()=>focusCell(nextIndex,"hsn"),40);
   };
   const handleBarcode = (value:string) => {
     const q=value.trim(); if(!q)return;
@@ -915,16 +882,14 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
   const save=async()=>{setSaving(true);try{
     const valid=items.filter(i=>i.product_name&&Number(i.qty)>0); if(!valid.length)throw new Error("Add at least one item");
     const {data:oldItems}=await supabase.from("purchase_items").select("*").eq("purchase_id",id);
-    for(const oi of oldItems??[]){if(!oi.product_id)continue;const qty=Number(oi.qty)||0;const {data:p}=await supabase.from("products").select("stock").eq("id",oi.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)-qty}).eq("id",oi.product_id);if(qty)await supabase.from("stock_ledger").insert({product_id:oi.product_id,change:-qty,reason:"purchase_edit",ref_id:id});}
+    for(const oi of oldItems??[]){if(!oi.product_id)continue;const {data:p}=await supabase.from("products").select("stock").eq("id",oi.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)-Number(oi.qty)}).eq("id",oi.product_id);}
     await supabase.from("purchase_items").delete().eq("purchase_id",id);
     const rows=valid.map(i=>{const q=Number(i.qty),c=Number(i.cost),g=Number(i.gst_rate),line=q*c;return {purchase_id:id,product_id:i.product_id,product_name:i.product_name,barcode:i.barcode||null,hsn_code:i.hsn_code||null,qty:q,cost:c,mrp:Number(i.mrp)||0,sale_price:Number(i.sale_price)||0,gst_rate:g,gst_amount:line*g/100,total:line*(1+g/100)};});
     const {error:ie}=await supabase.from("purchase_items").insert(rows);if(ie)throw ie;
-    const addByProduct=new Map<string,{qty:number;cost:number;mrp:number;sale:number}>();
-    for(const i of valid){if(!i.product_id)continue;const pid=i.product_id;const cur=addByProduct.get(pid)??{qty:0,cost:0,mrp:0,sale:0};cur.qty+=Number(i.qty)||0;cur.cost=Number(i.cost)||0;if(Number(i.mrp)>0)cur.mrp=Number(i.mrp);if(Number(i.sale_price)>0)cur.sale=Number(i.sale_price);addByProduct.set(pid,cur);}
-    for(const [pid,a] of addByProduct){const {data:p}=await supabase.from("products").select("stock,mrp,sale_price").eq("id",pid).single();if(p)await supabase.from("products").update({stock:Number(p.stock)+a.qty,purchase_price:a.cost,mrp:a.mrp||p.mrp,sale_price:a.sale||p.sale_price}).eq("id",pid);if(a.qty)await supabase.from("stock_ledger").insert({product_id:pid,change:a.qty,reason:"purchase_edit",ref_id:id});}
+    for(const i of valid){if(!i.product_id)continue;const {data:p}=await supabase.from("products").select("stock").eq("id",i.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)+Number(i.qty),purchase_price:Number(i.cost)||0,mrp:Number(i.mrp)||p.mrp,sale_price:Number(i.sale_price)||p.sale_price}).eq("id",i.product_id);}
     const supplier=suppliers.find(s=>s.id===supplierId);
     const {error:e}=await supabase.from("purchases").update({bill_no:billNo||null,bill_date:billDate,supplier_id:supplierId||null,supplier_name:supplier?.name||null,subtotal:totals.sub,tax_amount:totals.tax,total,paid:Number(paid)||0,payment_mode:paymentMode}).eq("id",id);if(e)throw e;
-    toast.success(`Purchase updated · Difference ${diff>=0?"+":"−"}${inr(Math.abs(diff))}`);qc.invalidateQueries();onClose();
+    toast.success(`Purchase updated · Difference ${diff>=0?"+":"−"}${inr(Math.abs(diff))}`);qc.invalidateQueries({queryKey:["purchases"]});qc.invalidateQueries({queryKey:["products"]});qc.invalidateQueries({queryKey:["variants-all"]});invalidateReports(qc);onClose();
   }catch(e:any){toast.error(e.message??"Failed to update purchase")}finally{setSaving(false)}};
 
   if(!head)return <Dialog open onOpenChange={onClose}><DialogContent>Loading…</DialogContent></Dialog>;
@@ -937,7 +902,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
         <div className="sm:col-span-2"><Label>Supplier</Label><Select value={supplierId||"none"} onValueChange={v=>{setSupplierId(v==="none"?"":v);setTimeout(()=>barcodeRef.current?.focus(),30)}}><SelectTrigger><SelectValue placeholder="Select supplier"/></SelectTrigger><SelectContent><SelectItem value="none">None</SelectItem>{suppliers.map(s=><SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div>
       </div>
       <div className="mt-3 rounded-md border border-primary/40 bg-primary/5 p-3"><div className="flex items-center justify-between gap-2"><Label className="text-xs uppercase tracking-wide flex items-center gap-1"><Scan className="h-3.5 w-3.5"/> Scan / Enter Barcode</Label><Button type="button" variant="outline" size="sm" className="h-6 text-xs px-2" onClick={()=>setPickerOpen(true)}>All items</Button></div><Input ref={barcodeRef} value={barcode} onChange={e=>setBarcode(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();handleBarcode(barcode)}}} placeholder="Scan barcode and press Enter" className="mt-1 font-mono"/></div>
-      <div className="border rounded-md overflow-x-auto mt-3"><Table><TableHeader><TableRow><TableHead className="w-[24%]">Product</TableHead><TableHead>Barcode</TableHead><TableHead>HSN</TableHead><TableHead>Qty</TableHead><TableHead>Cost</TableHead><TableHead>MRP</TableHead><TableHead>Sale ₹</TableHead><TableHead>GST%</TableHead><TableHead className="text-right">Amount</TableHead><TableHead/></TableRow></TableHeader><TableBody>{items.map((i,idx)=>{const q=Number(i.qty)||0,c=Number(i.cost)||0,g=Number(i.gst_rate)||0;return <TableRow key={`${i.product_id}-${idx}`}><TableCell className="font-medium">{i.product_name}</TableCell>{(["barcode","hsn","qty","cost","mrp","sale","gst"] as const).map(col=><TableCell key={col}><Input ref={setCell(idx,col)} value={(i as any)[col==="sale"?"sale_price":col]} onChange={e=>upd(idx,{[col==="sale"?"sale_price":col]:e.target.value} as any)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();const n=nextCol(col);if(n)focusCell(idx,n);else if(idx<items.length-1)focusCell(idx+1,"barcode");else{barcodeRef.current?.focus();barcodeRef.current?.select()}}}} className="h-7 text-xs"/></TableCell>)}<TableCell className="text-right font-mono">{inr(q*c*(1+g/100))}<div className="text-[10px] text-muted-foreground">GST {inr(q*c*g/100)}</div></TableCell><TableCell><Button size="icon" variant="ghost" onClick={()=>remove(idx)}><Trash2 className="h-4 w-4 text-destructive"/></Button></TableCell></TableRow>})}</TableBody></Table></div>
+      <div className="border rounded-md overflow-x-auto mt-3"><Table><TableHeader><TableRow><TableHead className="w-[24%]">Product</TableHead><TableHead>Barcode</TableHead><TableHead>HSN</TableHead><TableHead>Qty</TableHead><TableHead>Cost</TableHead><TableHead>MRP</TableHead><TableHead>Sale ₹</TableHead><TableHead>GST%</TableHead><TableHead className="text-right">Amount</TableHead><TableHead/></TableRow></TableHeader><TableBody>{items.map((i,idx)=>{const q=Number(i.qty)||0,c=Number(i.cost)||0,g=Number(i.gst_rate)||0;const fieldFor=(col:string)=>col==="sale"?"sale_price":col==="gst"?"gst_rate":col==="hsn"?"hsn_code":col;return <TableRow key={`${i.product_id}-${idx}`}><TableCell className="font-medium">{i.product_name}</TableCell>{(["barcode","hsn","qty","cost","mrp","sale","gst"] as const).map(col=><TableCell key={col}><Input ref={setCell(idx,col)} value={(i as any)[fieldFor(col)]} onChange={e=>upd(idx,{[fieldFor(col)]:e.target.value} as any)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();const n=nextCol(col);if(n)focusCell(idx,n);else if(idx<items.length-1)focusCell(idx+1,"barcode");else{barcodeRef.current?.focus();barcodeRef.current?.select()}}}} className="h-7 text-xs"/></TableCell>)}<TableCell className="text-right font-mono">{inr(q*c*(1+g/100))}</TableCell><TableCell><Button size="icon" variant="ghost" onClick={()=>remove(idx)}><Trash2 className="h-4 w-4 text-destructive"/></Button></TableCell></TableRow>})}</TableBody></Table></div>
       <Button variant="outline" size="sm" className="mt-2 w-fit" onClick={()=>setItems(a=>[...a,emptyRow()])}><Plus className="h-4 w-4 mr-1"/> Add Row</Button>
       <div className="grid sm:grid-cols-3 gap-3 mt-3"><div><Label>Payment Mode</Label><Select value={paymentMode} onValueChange={setPaymentMode}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent><SelectItem value="Cash">Cash</SelectItem><SelectItem value="Bank">Bank</SelectItem><SelectItem value="UPI">UPI</SelectItem><SelectItem value="Credit">Credit</SelectItem></SelectContent></Select></div><div><Label>Paid</Label><Input inputMode="decimal" value={paid} onChange={e=>setPaid(e.target.value)}/></div><div className="rounded-md border p-3 bg-muted/30"><div className="flex justify-between text-sm"><span>Subtotal</span><span className="font-mono">{inr(totals.sub)}</span></div><div className="flex justify-between text-sm"><span>Tax</span><span className="font-mono">{inr(totals.tax)}</span></div><div className="flex justify-between font-bold mt-1"><span>New Total</span><span className="font-mono">{inr(total)}</span></div><div className={`flex justify-between text-sm mt-1 font-semibold ${diff===0?"text-muted-foreground":diff>0?"text-destructive":"text-emerald-600"}`}><span>Amount Difference</span><span className="font-mono">{diff>=0?"+":"−"}{inr(Math.abs(diff))}</span></div></div></div>
     </div>

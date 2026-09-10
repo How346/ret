@@ -122,9 +122,13 @@ function ProductsPage() {
       setDeleting(false);
       setDeleteTarget(null);
       // Avoid the native confirm()/stale-button focus problem that could leave
-      // Chromium's keyboard focus in a broken state after a deletion.
+      // Chromium's keyboard focus in a broken state after a deletion, and
+      // guard against a known Radix bug where document.body can be left with
+      // pointer-events:none (freezing every input on the page) when a dialog
+      // closes the same instant its underlying row disappears.
       requestAnimationFrame(() => {
         try { window.getSelection()?.removeAllRanges(); } catch { /* ignore */ }
+        if (document.body.style.pointerEvents === "none") document.body.style.pointerEvents = "";
         searchRef.current?.focus();
       });
     }

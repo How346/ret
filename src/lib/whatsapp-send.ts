@@ -30,7 +30,7 @@ export function normalizeWhatsAppPhone(raw: string, countryCode: string | null |
 
 export type SendReceiptResult = {
   success: boolean;
-  mode: "desktop-browser" | "desktop-app" | "embedded-web" | "web-text-only";
+  mode: "desktop-browser" | "web-text-only";
   imaged?: boolean;
   pdfOpened?: boolean;
   errorType?: string;
@@ -94,7 +94,28 @@ async function renderBillImageDataUrl(html: string, widthPx: number): Promise<st
       scrollX: 0,
       scrollY: 0,
     });
-    return canvas.toDataURL("image/png");
+    try {
+      return canvas.toDataURL("image/png");
+    } catch {
+      // A cross-origin image without CORS headers (most commonly the shop
+      // logo) "taints" the canvas and makes toDataURL() throw a
+      // SecurityError. Rather than losing the whole bill image over a logo,
+      // drop any <img> tags and render again as text-only.
+      const imgsToStrip = Array.from(host.querySelectorAll("img"));
+      for (const img of imgsToStrip) img.remove();
+      const retryCanvas = await html2canvas(host, {
+        backgroundColor: "#ffffff",
+        scale: 2,
+        useCORS: true,
+        allowTaint: false,
+        logging: false,
+        width,
+        windowWidth: width,
+        scrollX: 0,
+        scrollY: 0,
+      });
+      return retryCanvas.toDataURL("image/png");
+    }
   } finally {
     host.remove();
   }
@@ -109,11 +130,18 @@ export async function sendReceiptOnWhatsApp(opts: {
   const widthPx = opts.paperSize === "58mm" ? 260 : opts.paperSize === "A4" ? 794 : 360;
 
   if (isDesktopPrintingAvailable() && window.electronAPI?.sendReceiptWhatsAppImage) {
+    // Render the bill to a PNG in the renderer (real Chromium layout engine,
+    // most reliable). If this throws for any reason (e.g. an exotic CSS
+    // value html2canvas can't parse), don't give up on the whole send —
+    // fall through with no image and let the main process still open
+    // WhatsApp and fall back to a PDF instead.
+    let imageDataUrl = "";
     try {
-      // Renderer-side capture: html2canvas -> PNG data URL.
-      // Main process then converts it with nativeImage and puts it on the
-      // real OS clipboard before opening WhatsApp in the default browser.
-      const imageDataUrl = await renderBillImageDataUrl(opts.html, widthPx);
+      imageDataUrl = await renderBillImageDataUrl(opts.html, widthPx);
+    } catch {
+      imageDataUrl = "";
+    }
+    try {
       const res = await window.electronAPI.sendReceiptWhatsAppImage(
         imageDataUrl,
         opts.phone,
