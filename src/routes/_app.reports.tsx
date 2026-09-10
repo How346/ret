@@ -21,6 +21,7 @@ function ReportsPage() {
 
   const { data: sales = [] } = useQuery({
     queryKey: ["report-sales", from, to],
+    staleTime: 0, refetchOnMount: "always", refetchOnWindowFocus: true,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("sales").select("*")
@@ -34,6 +35,7 @@ function ReportsPage() {
 
   const { data: products = [] } = useQuery({
     queryKey: ["report-products"],
+    staleTime: 0, refetchOnMount: "always", refetchOnWindowFocus: true,
     queryFn: async () => {
       const { data } = await supabase.from("products").select("*");
       return data ?? [];
@@ -42,6 +44,7 @@ function ReportsPage() {
 
   const { data: saleItems = [] } = useQuery({
     queryKey: ["report-saleitems", from, to],
+    staleTime: 0, refetchOnMount: "always", refetchOnWindowFocus: true,
     queryFn: async () => {
       const { data } = await supabase.from("sale_items").select("*, sales!inner(created_at)")
         .gte("sales.created_at", new Date(`${from}T00:00:00+05:30`).toISOString())
@@ -53,7 +56,7 @@ function ReportsPage() {
   const dailySummary = useMemo(() => {
     const map = new Map<string, { date: string; bills: number; total: number; tax: number }>();
     for (const s of sales as any[]) {
-      const d = String(s.created_at).slice(0, 10);
+      const d = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(s.created_at));
       const e = map.get(d) ?? { date: d, bills: 0, total: 0, tax: 0 };
       e.bills += 1;
       e.total += Number(s.total ?? 0);
@@ -88,9 +91,12 @@ function ReportsPage() {
     // Group by GST rate
     const m = new Map<number, { rate: number; taxable: number; cgst: number; sgst: number; igst: number; total: number }>();
     for (const i of saleItems as any[]) {
-      const rate = Number(i.gst_rate);
-      const taxable = Number(i.qty) * Number(i.price) - Number(i.discount);
-      const gst = Number(i.gst_amount);
+      const rate = Number(i.gst_rate) || 0;
+      // Sale prices are stored as GST-inclusive amounts. Report taxable value
+      // and GST from the actual saved line total, not by adding GST on top.
+      const lineTotal = Math.max(0, Number(i.total) || (Number(i.qty || 0) * Number(i.price || 0) - Number(i.discount || 0)));
+      const taxable = rate > 0 ? lineTotal / (1 + rate / 100) : lineTotal;
+      const gst = Math.max(0, lineTotal - taxable);
       const e = m.get(rate) ?? { rate, taxable: 0, cgst: 0, sgst: 0, igst: 0, total: 0 };
       e.taxable += taxable;
       e.cgst += gst / 2;
@@ -105,7 +111,7 @@ function ReportsPage() {
     let costVal = 0, mrpVal = 0;
     for (const p of products as any[]) {
       costVal += Number(p.stock) * Number(p.purchase_price ?? 0);
-      mrpVal += Number(p.stock) * Number(p.sale_price ?? 0);
+      mrpVal += Number(p.stock) * Number(p.mrp ?? 0);
     }
     return { costVal, mrpVal, count: products.length };
   }, [products]);

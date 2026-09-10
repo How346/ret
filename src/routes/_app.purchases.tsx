@@ -827,7 +827,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
   const nextCol = (col: string) => COLS[COLS.indexOf(col as any) + 1];
 
   const { data: suppliers = [] } = useQuery({
-    queryKey: ["suppliers-list"], queryFn: async () => {
+    queryKey: ["suppliers-list"], staleTime: 60_000, queryFn: async () => {
       const { data } = await supabase.from("suppliers").select("id,name").order("name"); return (data ?? []) as Supplier[];
     },
   });
@@ -867,7 +867,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
           sale_price:String(Number(r.sale_price) > 0 ? r.sale_price : (Number(m.sale_price) || 0)),
           // Older purchase rows may contain the default 0 even though the product
           // master has a GST rate. Show that useful rate while loading the edit.
-          gst_rate:String(Number.isFinite(storedGst) && storedGst > 0 ? storedGst : (masterGst || 0)),
+          gst_rate:String((r.gst_rate === null || r.gst_rate === undefined || storedGst === 0) && masterGst > 0 ? masterGst : (Number.isFinite(storedGst) ? storedGst : masterGst)),
         };
       }));
       setTimeout(() => barcodeRef.current?.focus(), 80);
@@ -877,10 +877,19 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
   const upd = (idx:number, patch:Partial<LineItem>) => setItems(a => a.map((x,i)=>i===idx?{...x,...patch}:x));
   const remove = (idx:number) => setItems(a => a.filter((_,i)=>i!==idx));
   const addProduct = (p: Product) => {
-    const existing = items.findIndex(x => x.product_id === p.id);
-    if (existing >= 0) { upd(existing,{qty:String((Number(items[existing].qty)||0)+1)}); focusCell(existing,"qty"); return; }
-    const row:LineItem={product_id:p.id,product_name:p.name,barcode:p.barcode??"",hsn_code:p.hsn_code??"",qty:"1",cost:String(p.purchase_price||0),mrp:String(p.mrp||0),sale_price:String(p.sale_price||0),gst_rate:String(p.gst_rate||0)};
-    const nextIndex = items.length; setItems(a=>[...a,row]); setTimeout(()=>focusCell(nextIndex,"hsn"),40);
+    let targetIndex = -1;
+    let wasExisting = false;
+    setItems(arr => {
+      const existing = arr.findIndex(x => x.product_id === p.id);
+      if (existing >= 0) {
+        targetIndex = existing; wasExisting = true;
+        return arr.map((x,i) => i === existing ? { ...x, qty: String((Number(x.qty)||0) + 1) } : x);
+      }
+      const row:LineItem={product_id:p.id,product_name:p.name,barcode:p.barcode??"",hsn_code:p.hsn_code??"",qty:"1",cost:String(p.purchase_price||0),mrp:String(p.mrp||0),sale_price:String(p.sale_price||0),gst_rate:String(p.gst_rate||0)};
+      targetIndex = arr.length;
+      return [...arr,row];
+    });
+    setTimeout(() => focusCell(targetIndex, wasExisting ? "qty" : "hsn"), 40);
   };
   const handleBarcode = (value:string) => {
     const q=value.trim(); if(!q)return;
@@ -914,7 +923,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
         <div className="sm:col-span-2"><Label>Supplier</Label><Select value={supplierId||"none"} onValueChange={v=>{setSupplierId(v==="none"?"":v);setTimeout(()=>barcodeRef.current?.focus(),30)}}><SelectTrigger><SelectValue placeholder="Select supplier"/></SelectTrigger><SelectContent><SelectItem value="none">None</SelectItem>{suppliers.map(s=><SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div>
       </div>
       <div className="mt-3 rounded-md border border-primary/40 bg-primary/5 p-3"><div className="flex items-center justify-between gap-2"><Label className="text-xs uppercase tracking-wide flex items-center gap-1"><Scan className="h-3.5 w-3.5"/> Scan / Enter Barcode</Label><Button type="button" variant="outline" size="sm" className="h-6 text-xs px-2" onClick={()=>setPickerOpen(true)}>All items</Button></div><Input ref={barcodeRef} value={barcode} onChange={e=>setBarcode(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();handleBarcode(barcode)}}} placeholder="Scan barcode and press Enter" className="mt-1 font-mono"/></div>
-      <div className="border rounded-md overflow-x-auto mt-3"><Table><TableHeader><TableRow><TableHead className="w-[24%]">Product</TableHead><TableHead>Barcode</TableHead><TableHead>HSN</TableHead><TableHead>Qty</TableHead><TableHead>Cost</TableHead><TableHead>MRP</TableHead><TableHead>Sale ₹</TableHead><TableHead>GST%</TableHead><TableHead className="text-right">Amount</TableHead><TableHead/></TableRow></TableHeader><TableBody>{items.map((i,idx)=>{const q=Number(i.qty)||0,c=Number(i.cost)||0,g=Number(i.gst_rate)||0;return <TableRow key={`${i.product_id}-${idx}`}><TableCell className="font-medium">{i.product_name}</TableCell>{(["barcode","hsn","qty","cost","mrp","sale","gst"] as const).map(col=><TableCell key={col}><Input ref={setCell(idx,col)} value={(i as any)[col==="sale"?"sale_price":col]} onChange={e=>upd(idx,{[col==="sale"?"sale_price":col]:e.target.value} as any)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();const n=nextCol(col);if(n)focusCell(idx,n);else if(idx<items.length-1)focusCell(idx+1,"barcode");else{barcodeRef.current?.focus();barcodeRef.current?.select()}}}} className="h-7 text-xs"/></TableCell>)}<TableCell className="text-right font-mono">{inr(q*c*(1+g/100))}</TableCell><TableCell><Button size="icon" variant="ghost" onClick={()=>remove(idx)}><Trash2 className="h-4 w-4 text-destructive"/></Button></TableCell></TableRow>})}</TableBody></Table></div>
+      <div className="border rounded-md overflow-x-auto mt-3"><Table><TableHeader><TableRow><TableHead className="w-[24%]">Product</TableHead><TableHead>Barcode</TableHead><TableHead>HSN</TableHead><TableHead>Qty</TableHead><TableHead>Cost</TableHead><TableHead>MRP</TableHead><TableHead>Sale ₹</TableHead><TableHead>GST%</TableHead><TableHead className="text-right">Amount</TableHead><TableHead/></TableRow></TableHeader><TableBody>{items.map((i,idx)=>{const q=Number(i.qty)||0,c=Number(i.cost)||0,g=Number(i.gst_rate)||0;return <TableRow key={`${i.product_id}-${idx}`}><TableCell className="font-medium">{i.product_name}</TableCell>{(["barcode","hsn","qty","cost","mrp","sale","gst"] as const).map(col=><TableCell key={col}><Input ref={setCell(idx,col)} value={(i as any)[col==="sale"?"sale_price":col]} onChange={e=>upd(idx,{[col==="sale"?"sale_price":col]:e.target.value} as any)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();const n=nextCol(col);if(n)focusCell(idx,n);else if(idx<items.length-1)focusCell(idx+1,"barcode");else{barcodeRef.current?.focus();barcodeRef.current?.select()}}}} className="h-7 text-xs"/></TableCell>)}<TableCell className="text-right font-mono">{inr(q*c*(1+g/100))}<div className="text-[10px] text-muted-foreground">GST {inr(q*c*g/100)}</div></TableCell><TableCell><Button size="icon" variant="ghost" onClick={()=>remove(idx)}><Trash2 className="h-4 w-4 text-destructive"/></Button></TableCell></TableRow>})}</TableBody></Table></div>
       <Button variant="outline" size="sm" className="mt-2 w-fit" onClick={()=>setItems(a=>[...a,emptyRow()])}><Plus className="h-4 w-4 mr-1"/> Add Row</Button>
       <div className="grid sm:grid-cols-3 gap-3 mt-3"><div><Label>Payment Mode</Label><Select value={paymentMode} onValueChange={setPaymentMode}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent><SelectItem value="Cash">Cash</SelectItem><SelectItem value="Bank">Bank</SelectItem><SelectItem value="UPI">UPI</SelectItem><SelectItem value="Credit">Credit</SelectItem></SelectContent></Select></div><div><Label>Paid</Label><Input inputMode="decimal" value={paid} onChange={e=>setPaid(e.target.value)}/></div><div className="rounded-md border p-3 bg-muted/30"><div className="flex justify-between text-sm"><span>Subtotal</span><span className="font-mono">{inr(totals.sub)}</span></div><div className="flex justify-between text-sm"><span>Tax</span><span className="font-mono">{inr(totals.tax)}</span></div><div className="flex justify-between font-bold mt-1"><span>New Total</span><span className="font-mono">{inr(total)}</span></div><div className={`flex justify-between text-sm mt-1 font-semibold ${diff===0?"text-muted-foreground":diff>0?"text-destructive":"text-emerald-600"}`}><span>Amount Difference</span><span className="font-mono">{diff>=0?"+":"−"}{inr(Math.abs(diff))}</span></div></div></div>
     </div>
