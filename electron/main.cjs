@@ -1,6 +1,8 @@
 const { app, BrowserWindow, shell, ipcMain, clipboard, nativeImage } = require("electron");
-const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
-const QRCode = require("qrcode");
+let whatsappWebJs = null;
+let QRCode = null;
+try { whatsappWebJs = require("whatsapp-web.js"); } catch (error) { console.error("whatsapp-web.js is not installed in the packaged application:", error?.message || error); }
+try { QRCode = require("qrcode"); } catch (error) { console.error("qrcode is not installed in the packaged application:", error?.message || error); }
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -36,6 +38,11 @@ function cleanWhatsAppPhone(phone) {
 
 async function initializeWhatsApp() {
   if (whatsappClient || whatsappInitializing) return;
+  if (!whatsappWebJs || !QRCode) {
+    sendWhatsAppEvent("whatsapp-error", { error: "WhatsApp background dependencies are missing. Rebuild the desktop app after installing dependencies." });
+    return;
+  }
+  const { Client, LocalAuth } = whatsappWebJs;
   whatsappInitializing = true;
   try {
     whatsappClient = new Client({
@@ -125,6 +132,8 @@ ipcMain.handle("send-bill-image", async (_event, payload) => {
     }
 
     const chatId = `${phone}@c.us`;
+    if (!whatsappWebJs) return { success: false, errorType: "whatsapp-web.js is not installed" };
+    const { MessageMedia } = whatsappWebJs;
     const media = new MessageMedia("image/png", base64Image, "bill.png");
     await whatsappClient.sendMessage(chatId, media, { caption: message });
     return { success: true };
