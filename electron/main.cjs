@@ -5,6 +5,7 @@ const os = require("node:os");
 const { getHWID, readStoredLicenseAsync, installLicenseAsync, removeLicense } = require("./license.cjs");
 
 let mainWindow = null;
+let whatsappWindow = null;
 
 // ---------------------------------------------------------------------------
 // Offline signed licensing
@@ -278,16 +279,83 @@ async function createBillPdf(html, widthPx) {
 // used; Electron does not embed or control it.
 ipcMain.handle("whatsapp:open-web", async () => {
   try {
-    await shell.openExternal("https://web.whatsapp.com/");
-    return { success: true };
+    if (whatsappWindow && !whatsappWindow.isDestroyed()) {
+      await whatsappWindow.loadURL("https://web.whatsapp.com/");
+      whatsappWindow.show(); whatsappWindow.focus();
+      return { success: true, mode: "embedded-web" };
+    }
+    whatsappWindow = new BrowserWindow({
+      width: 1280, height: 900, minWidth: 900, minHeight: 650,
+      show: false, autoHideMenuBar: true, title: "WhatsApp Web",
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, partition: "persist:whatsapp" }
+    });
+    whatsappWindow.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+    whatsappWindow.on("closed", () => { whatsappWindow = null; });
+    whatsappWindow.webContents.setWindowOpenHandler(({ url }) => { if (url && /^https?:\/\//.test(url)) shell.openExternal(url); return { action: "deny" }; });
+    await whatsappWindow.loadURL("https://web.whatsapp.com/");
+    whatsappWindow.show(); whatsappWindow.focus();
+    return { success: true, mode: "embedded-web" };
   } catch (err) {
-    return { success: false, errorType: String((err && err.message) || err) };
+    try { await shell.openExternal("https://web.whatsapp.com/"); return { success: true, mode: "desktop-browser" }; }
+    catch (err2) { return { success: false, errorType: String((err2 && err2.message) || err2 || err) }; }
   }
 });
 
+async function openWhatsAppChat(phone, message = "") {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (!digits) return { success: false, errorType: "missing-phone" };
+  const url = `https://web.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(String(message || ""))}`;
+
+  // Primary approach: open WhatsApp Web in a dedicated Chromium window with
+  // its own persistent session. This avoids Windows default-browser/URL
+  // association problems and keeps the WhatsApp login available next time.
+  try {
+    if (whatsappWindow && !whatsappWindow.isDestroyed()) {
+      await whatsappWindow.loadURL(url);
+      whatsappWindow.show();
+      whatsappWindow.focus();
+      return { success: true, mode: "embedded-web", url };
+    }
+
+    whatsappWindow = new BrowserWindow({
+      width: 1280, height: 900, minWidth: 900, minHeight: 650,
+      show: false, autoHideMenuBar: true, title: "WhatsApp Web",
+      webPreferences: {
+        contextIsolation: true, nodeIntegration: false, sandbox: true,
+        partition: "persist:whatsapp",
+      },
+    });
+    whatsappWindow.webContents.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    );
+    whatsappWindow.on("closed", () => { whatsappWindow = null; });
+    whatsappWindow.webContents.setWindowOpenHandler(({ url: childUrl }) => {
+      if (childUrl && /^https?:\/\//.test(childUrl)) shell.openExternal(childUrl);
+      return { action: "deny" };
+    });
+    await whatsappWindow.loadURL(url);
+    whatsappWindow.show();
+    whatsappWindow.focus();
+    return { success: true, mode: "embedded-web", url };
+  } catch (embeddedError) {
+    // Fallback: installed WhatsApp Desktop or the system browser.
+    try {
+      await shell.openExternal(`whatsapp://send?phone=${digits}&text=${encodeURIComponent(String(message || ""))}`);
+      return { success: true, mode: "desktop-app", url };
+    } catch {
+      try {
+        await shell.openExternal(`https://wa.me/${digits}?text=${encodeURIComponent(String(message || ""))}`);
+        return { success: true, mode: "desktop-browser", url };
+      } catch (err) {
+        return { success: false, errorType: String((err && err.message) || embeddedError || err) };
+      }
+    }
+  }
+}
+
 // Captures the bill as an image (copied to clipboard), then opens the
-// customer's WhatsApp Web chat in the user's default browser with the
-// message pre-filled, ready for the cashier to paste the image and send.
+// customer's WhatsApp chat using WhatsApp Desktop when available, otherwise
+// a dedicated WhatsApp Web window inside the app.
 ipcMain.handle("whatsapp:send-image", async (_event, payload) => {
   const imageDataUrl = String((payload && payload.imageDataUrl) || "");
   let phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");
@@ -315,21 +383,8 @@ ipcMain.handle("whatsapp:send-image", async (_event, payload) => {
   let pdfOpened = false;
   if (!imaged && html) pdfOpened = !!(await createBillPdf(html, widthPx));
 
-  // wa.me is the most reliable external hand-off: the user's default browser
-  // resolves it to WhatsApp Web/Desktop depending on their setup.
-  try {
-    const chatUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
-    await shell.openExternal(chatUrl);
-    return { success: true, imaged, pdfOpened, url: chatUrl };
-  } catch (err) {
-    try {
-      const fallbackUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
-      await shell.openExternal(fallbackUrl);
-      return { success: true, imaged, pdfOpened, url: fallbackUrl, fallback: true };
-    } catch (err2) {
-      return { success: false, errorType: String((err2 && err2.message) || err2 || err), imaged, pdfOpened };
-    }
-  }
+  const opened = await openWhatsAppChat(phone, message);
+  return { ...opened, imaged, pdfOpened };
 });
 
 ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
@@ -350,11 +405,6 @@ ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
     pdfOpened = !!(await createBillPdf(html, widthPx));
   }
 
-  try {
-    const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
-    await shell.openExternal(chatUrl);
-    return { success: true, imaged, pdfOpened };
-  } catch (err) {
-    return { success: false, errorType: String((err && err.message) || err), imaged, pdfOpened };
-  }
+  const opened = await openWhatsAppChat(phone, message);
+  return { ...opened, imaged, pdfOpened };
 });

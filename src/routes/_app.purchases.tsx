@@ -65,14 +65,14 @@ function PurchasesPage() {
         if (it.product_id) {
           const { data: p } = await supabase.from("products").select("stock").eq("id", it.product_id).single();
           if (p) await supabase.from("products").update({ stock: Number(p.stock) - Number(it.qty) }).eq("id", it.product_id);
+          await supabase.from("stock_ledger").insert({ product_id: it.product_id, change: -Number(it.qty), reason: "purchase_void", ref_id: id });
         }
       }
       const { error } = await supabase.from("purchases").delete().eq("id", id);
       if (error) throw error;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["purchases"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries();
       toast.success("Purchase removed and stock adjusted");
     },
     onError: (e: any) => toast.error(e.message),
@@ -407,9 +407,7 @@ function NewPurchaseDialog({ onClose }: { onClose: () => void }) {
 
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["purchases"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
-      qc.invalidateQueries({ queryKey: ["variants-all"] });
+      qc.invalidateQueries();
       toast.success("Purchase saved · Stock updated");
       onClose();
     },
@@ -854,7 +852,24 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
       const masterMap = new Map((masters ?? []).map((m:any)=>[m.id,m]));
       setHead(h); setOriginalTotal(Number(h?.total ?? 0)); setBillNo(h?.bill_no ?? ""); setBillDate(h?.bill_date ?? "");
       setSupplierId(h?.supplier_id ?? ""); setPaymentMode(h?.payment_mode ?? "Cash"); setPaid(String(h?.paid ?? 0));
-      setItems((its ?? []).map((r: any) => { const m:any=masterMap.get(r.product_id) || {}; return { product_id:r.product_id, product_name:r.product_name ?? "", barcode:r.barcode ?? m.barcode ?? "", hsn_code:r.hsn_code ?? m.hsn_code ?? "", qty:String(r.qty ?? 1), cost:String(r.cost ?? m.purchase_price ?? 0), mrp:String(r.mrp ?? m.mrp ?? 0), sale_price:String(r.sale_price ?? m.sale_price ?? 0), gst_rate:String(r.gst_rate ?? m.gst_rate ?? 0) }; }));
+      setItems((its ?? []).map((r: any) => {
+        const m:any=masterMap.get(r.product_id) || {};
+        const storedGst=Number(r.gst_rate);
+        const masterGst=Number(m.gst_rate);
+        const storedCost=Number(r.cost);
+        const masterCost=Number(m.purchase_price);
+        return {
+          product_id:r.product_id, product_name:r.product_name ?? "",
+          barcode:r.barcode ?? m.barcode ?? "", hsn_code:r.hsn_code ?? m.hsn_code ?? "",
+          qty:String(r.qty ?? 1),
+          cost:String(Number.isFinite(storedCost) && storedCost > 0 ? storedCost : (masterCost || 0)),
+          mrp:String(Number(r.mrp) > 0 ? r.mrp : (Number(m.mrp) || 0)),
+          sale_price:String(Number(r.sale_price) > 0 ? r.sale_price : (Number(m.sale_price) || 0)),
+          // Older purchase rows may contain the default 0 even though the product
+          // master has a GST rate. Show that useful rate while loading the edit.
+          gst_rate:String(Number.isFinite(storedGst) && storedGst > 0 ? storedGst : (masterGst || 0)),
+        };
+      }));
       setTimeout(() => barcodeRef.current?.focus(), 80);
     })();
   }, [id]);
@@ -879,14 +894,14 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
   const save=async()=>{setSaving(true);try{
     const valid=items.filter(i=>i.product_name&&Number(i.qty)>0); if(!valid.length)throw new Error("Add at least one item");
     const {data:oldItems}=await supabase.from("purchase_items").select("*").eq("purchase_id",id);
-    for(const oi of oldItems??[]){if(!oi.product_id)continue;const {data:p}=await supabase.from("products").select("stock").eq("id",oi.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)-Number(oi.qty)}).eq("id",oi.product_id);}
+    for(const oi of oldItems??[]){if(!oi.product_id)continue;const qty=Number(oi.qty)||0;const {data:p}=await supabase.from("products").select("stock").eq("id",oi.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)-qty}).eq("id",oi.product_id);if(qty)await supabase.from("stock_ledger").insert({product_id:oi.product_id,change:-qty,reason:"purchase_edit",ref_id:id});}
     await supabase.from("purchase_items").delete().eq("purchase_id",id);
     const rows=valid.map(i=>{const q=Number(i.qty),c=Number(i.cost),g=Number(i.gst_rate),line=q*c;return {purchase_id:id,product_id:i.product_id,product_name:i.product_name,barcode:i.barcode||null,hsn_code:i.hsn_code||null,qty:q,cost:c,mrp:Number(i.mrp)||0,sale_price:Number(i.sale_price)||0,gst_rate:g,gst_amount:line*g/100,total:line*(1+g/100)};});
     const {error:ie}=await supabase.from("purchase_items").insert(rows);if(ie)throw ie;
-    for(const i of valid){if(!i.product_id)continue;const {data:p}=await supabase.from("products").select("stock").eq("id",i.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)+Number(i.qty),purchase_price:Number(i.cost)||0,mrp:Number(i.mrp)||p.mrp,sale_price:Number(i.sale_price)||p.sale_price}).eq("id",i.product_id);}
+    for(const i of valid){if(!i.product_id)continue;const qty=Number(i.qty)||0;const {data:p}=await supabase.from("products").select("stock").eq("id",i.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)+qty,purchase_price:Number(i.cost)||0,mrp:Number(i.mrp)||p.mrp,sale_price:Number(i.sale_price)||p.sale_price}).eq("id",i.product_id);if(qty)await supabase.from("stock_ledger").insert({product_id:i.product_id,change:qty,reason:"purchase_edit",ref_id:id});}
     const supplier=suppliers.find(s=>s.id===supplierId);
     const {error:e}=await supabase.from("purchases").update({bill_no:billNo||null,bill_date:billDate,supplier_id:supplierId||null,supplier_name:supplier?.name||null,subtotal:totals.sub,tax_amount:totals.tax,total,paid:Number(paid)||0,payment_mode:paymentMode}).eq("id",id);if(e)throw e;
-    toast.success(`Purchase updated · Difference ${diff>=0?"+":"−"}${inr(Math.abs(diff))}`);qc.invalidateQueries({queryKey:["purchases"]});qc.invalidateQueries({queryKey:["products"]});qc.invalidateQueries({queryKey:["variants-all"]});onClose();
+    toast.success(`Purchase updated · Difference ${diff>=0?"+":"−"}${inr(Math.abs(diff))}`);qc.invalidateQueries();onClose();
   }catch(e:any){toast.error(e.message??"Failed to update purchase")}finally{setSaving(false)}};
 
   if(!head)return <Dialog open onOpenChange={onClose}><DialogContent>Loading…</DialogContent></Dialog>;

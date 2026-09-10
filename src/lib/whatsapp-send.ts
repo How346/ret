@@ -30,7 +30,7 @@ export function normalizeWhatsAppPhone(raw: string, countryCode: string | null |
 
 export type SendReceiptResult = {
   success: boolean;
-  mode: "desktop-browser" | "web-text-only";
+  mode: "desktop-browser" | "desktop-app" | "embedded-web" | "web-text-only";
   imaged?: boolean;
   pdfOpened?: boolean;
   errorType?: string;

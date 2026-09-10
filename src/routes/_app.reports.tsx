@@ -24,8 +24,8 @@ function ReportsPage() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("sales").select("*")
-        .gte("created_at", `${from}T00:00:00`)
-        .lte("created_at", `${to}T23:59:59`)
+        .gte("created_at", new Date(`${from}T00:00:00+05:30`).toISOString())
+        .lte("created_at", new Date(`${to}T23:59:59.999+05:30`).toISOString())
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data ?? [];
@@ -44,8 +44,8 @@ function ReportsPage() {
     queryKey: ["report-saleitems", from, to],
     queryFn: async () => {
       const { data } = await supabase.from("sale_items").select("*, sales!inner(created_at)")
-        .gte("sales.created_at", `${from}T00:00:00`)
-        .lte("sales.created_at", `${to}T23:59:59`);
+        .gte("sales.created_at", new Date(`${from}T00:00:00+05:30`).toISOString())
+        .lte("sales.created_at", new Date(`${to}T23:59:59.999+05:30`).toISOString());
       return data ?? [];
     },
   });

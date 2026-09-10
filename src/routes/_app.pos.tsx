@@ -787,7 +787,7 @@ function POS() {
             }
 
             toast.success(`Invoice ${invNo} saved`);
-            qc.invalidateQueries({ queryKey: ["products", "pos"] });
+            qc.invalidateQueries();
             setPayOpen(false);
             clearBill();
             const customer = customers.find((c: any) => c.id === customerId) ?? null;
@@ -1349,24 +1349,26 @@ function WhatsAppSendDialog({
                 if (!phone.trim() || sending || !ask) return;
                 setSending(true);
                 void (async () => {
+                  let result: Awaited<ReturnType<typeof sendReceiptOnWhatsApp>> | null = null;
                   try {
                     const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
+                    result = res;
                     if (res.success) {
-                      if (res.mode === "desktop-browser" && res.imaged === false) {
+                      if (res.imaged === false) {
                         toast.warning(res.pdfOpened
                           ? "Bill image could not be copied. A PDF fallback was opened — attach it in WhatsApp."
                           : "Bill image could not be copied. Please try again or use Print.");
                       } else {
-                        toast.success(res.mode === "desktop-browser"
+                        toast.success(res.mode !== "web-text-only"
                           ? "Bill image copied — paste with Ctrl+V in WhatsApp and press Send"
                           : "WhatsApp opened");
                       }
                     } else {
-                      toast.error("Could not open WhatsApp — check the number and try again");
+                      toast.error(`Could not open WhatsApp${res.errorType ? `: ${res.errorType}` : ""}`);
                     }
                   } finally {
                     setSending(false);
-                    onClose();
+                    if (result?.success) onClose();
                   }
                 })();
               }}
@@ -1391,21 +1393,21 @@ function WhatsAppSendDialog({
               try {
                 const res = await sendReceiptOnWhatsApp({ html: ask.html, phone, message: ask.message, paperSize });
                 if (res.success) {
-                  if (res.mode === "desktop-browser" && res.imaged === false) {
+                  if (res.imaged === false) {
                     toast.warning(res.pdfOpened
                       ? "Bill image could not be copied. A PDF fallback was opened — attach it in WhatsApp."
                       : "Bill image could not be copied. Please try again or use Print.");
                   } else {
-                    toast.success(res.mode === "desktop-browser"
-                      ? "WhatsApp Web opened — paste the bill image (Ctrl+V) and press Send"
+                    toast.success(res.mode !== "web-text-only"
+                      ? "WhatsApp opened — paste the bill image (Ctrl+V) and press Send"
                       : "WhatsApp opened");
                   }
                 } else {
-                  toast.error("Couldn't open WhatsApp — check the number and try again");
+                  toast.error(`Couldn't open WhatsApp${res.errorType ? `: ${res.errorType}` : ""}`);
                 }
+                if (res?.success) onClose();
               } finally {
                 setSending(false);
-                onClose();
               }
             }}
           >
