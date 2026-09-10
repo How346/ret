@@ -75,7 +75,9 @@
     "vaul": "^1.1.2",
     "vite-tsconfig-paths": "^6.0.2",
     "zod": "^3.24.2",
-    "html2canvas": "^1.4.1"
+    "html2canvas": "^1.4.1",
+    "qrcode": "^1.5.4",
+    "whatsapp-web.js": "^1.34.7"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",

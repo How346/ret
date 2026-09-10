@@ -145,10 +145,3 @@
   color: var(--color-muted-foreground);
   border: 1px solid var(--color-border);
 }
-
-/* Current bill action-button clipping fix */
-.current-bill-items { min-width: 0; overflow: hidden; }
-.current-bill-items table { width: 100%; table-layout: fixed; }
-.current-bill-items .remove-item { min-width: 68px; margin-right: 8px; }
-.current-bill-items td:last-child,
-.current-bill-items th:last-child { width: 92px; padding-right: 16px; }

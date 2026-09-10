@@ -142,19 +142,24 @@ export async function sendReceiptOnWhatsApp(opts: {
       imageDataUrl = "";
     }
     try {
+      // New background sender: pass only the raw base64 payload to the main
+      // process. whatsapp-web.js creates MessageMedia directly from memory.
+      if (imageDataUrl && window.electronAPI.sendBillImage) {
+        const base64 = imageDataUrl.replace(/^data:image\/png;base64,/, "");
+        const res = await window.electronAPI.sendBillImage(base64, opts.phone, opts.message);
+        return {
+          success: !!res?.success,
+          mode: "desktop-browser",
+          imaged: !!res?.success,
+          errorType: res?.errorType,
+        };
+      }
       const res = await window.electronAPI.sendReceiptWhatsAppImage(
-        imageDataUrl,
-        opts.phone,
-        opts.message,
-        opts.html,
-        widthPx,
+        imageDataUrl, opts.phone, opts.message, opts.html, widthPx,
       );
       return {
-        success: !!res?.success,
-        mode: "desktop-browser",
-        imaged: res?.imaged,
-        pdfOpened: res?.pdfOpened,
-        errorType: res?.errorType,
+        success: !!res?.success, mode: "desktop-browser", imaged: res?.imaged,
+        pdfOpened: res?.pdfOpened, errorType: res?.errorType,
       };
     } catch (err: any) {
       return { success: false, mode: "desktop-browser", errorType: String(err?.message || err) };

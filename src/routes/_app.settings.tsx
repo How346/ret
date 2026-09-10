@@ -25,6 +25,7 @@ import {
   type PrinterInfo,
 } from "@/lib/printer-prefs";
 import { openWhatsAppWeb } from "@/lib/whatsapp-send";
+import { WhatsAppQrPanel } from "@/components/whatsapp-qr-panel";
 import { backupSupported, pickBackupFolder, getSavedFolder, forgetFolder, runBackup, restoreBackup } from "@/lib/local-backup";
 import { useMyLicense, licenseStatus, redeemLicenseKey } from "@/hooks/use-license";
 import { useQueryClient as useQC2 } from "@tanstack/react-query";
@@ -334,6 +335,7 @@ function Settings() {
         </TabsContent>
 
         <TabsContent value="whatsapp" className="mt-4">
+          <WhatsAppQrPanel />
           <Card className="p-6 space-y-4">
             <Toggle
               label="Enable WhatsApp bill sharing"

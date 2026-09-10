@@ -43,4 +43,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Renderer html2canvas image -> main-process nativeImage -> OS clipboard.
   sendReceiptWhatsAppImage: (imageDataUrl, phone, message, html, widthPx) =>
     ipcRenderer.invoke("whatsapp:send-image", { imageDataUrl, phone, message, html, widthPx }),
+  // Background whatsapp-web.js integration. The QR is returned as a data URL
+  // and never opens a browser window.
+  initializeWhatsApp: () => ipcRenderer.invoke("whatsapp:initialize"),
+  getWhatsAppStatus: () => ipcRenderer.invoke("whatsapp:status"),
+  sendBillImage: (base64Image, phone, message) =>
+    ipcRenderer.invoke("send-bill-image", { base64Image, phone, message }),
+  onWhatsAppQr: (callback) => {
+    const listener = (_event, dataUrl) => callback(dataUrl);
+    ipcRenderer.on("whatsapp-qr", listener);
+    return () => ipcRenderer.removeListener("whatsapp-qr", listener);
+  },
+  onWhatsAppReady: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("whatsapp-ready", listener);
+    return () => ipcRenderer.removeListener("whatsapp-ready", listener);
+  },
+  onWhatsAppError: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("whatsapp-error", listener);
+    return () => ipcRenderer.removeListener("whatsapp-error", listener);
+  },
 });
