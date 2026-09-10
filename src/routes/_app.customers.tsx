@@ -8,7 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Plus, Search, Loader2, UserRound } from "lucide-react";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Plus, Search, Loader2, UserRound, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { inr } from "@/lib/format";
 import { onEnterFocusNext } from "@/lib/keyboard-nav";
@@ -35,6 +36,7 @@ function Customers() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(emptyCustomer());
+  const [deleteCustomer, setDeleteCustomer] = useState<Customer | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
   const { data: rows = [], isLoading } = useQuery({
@@ -85,7 +87,18 @@ function Customers() {
     }
   };
 
+  const remove = async () => {
+    if (!deleteCustomer) return;
+    const { error } = await supabase.from("customers").delete().eq("id", deleteCustomer.id);
+    if (error) return toast.error(error.message);
+    toast.success("Customer deleted");
+    await qc.invalidateQueries({ queryKey: ["customers-page"] });
+    await qc.invalidateQueries({ queryKey: ["customers"] });
+    setDeleteCustomer(null);
+  };
+
   return (
+    <>
     <div className="p-4 h-[calc(100vh-3rem)] flex flex-col gap-4">
       <div className="flex items-center gap-3 flex-wrap">
         <div>
@@ -110,11 +123,12 @@ function Customers() {
                 <th className="text-left py-2">Email</th>
                 <th className="text-left py-2">GSTIN</th>
                 <th className="text-right py-2 px-3">Balance</th>
+                <th className="w-16" />
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={5} className="text-center py-12 text-muted-foreground">Loading customers…</td></tr>
+                <tr><td colSpan={6} className="text-center py-12 text-muted-foreground">Loading customers…</td></tr>
               ) : filtered.map(c => (
                 <tr key={c.id} className="border-t border-border hover:bg-muted/30">
                   <td className="py-2 px-3 font-medium">{c.name}</td>
@@ -122,10 +136,11 @@ function Customers() {
                   <td className="py-2">{c.email ?? "—"}</td>
                   <td className="py-2 font-mono text-xs">{c.gstin ?? "—"}</td>
                   <td className="py-2 px-3 text-right font-mono">{inr(Number(c.balance))}</td>
+                  <td className="py-2 px-2 text-right"><Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => setDeleteCustomer(c)}><Trash2 className="h-3.5 w-3.5" /></Button></td>
                 </tr>
               ))}
               {!isLoading && filtered.length === 0 && (
-                <tr><td colSpan={5} className="text-center py-12 text-muted-foreground">
+                <tr><td colSpan={6} className="text-center py-12 text-muted-foreground">
                   {rows.length ? "No customers match your search." : "No customers yet — click Add customer to create one."}
                 </td></tr>
               )}
@@ -159,5 +174,18 @@ function Customers() {
         </DialogContent>
       </Dialog>
     </div>
+    <AlertDialog open={!!deleteCustomer} onOpenChange={(open) => !open && setDeleteCustomer(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete customer?</AlertDialogTitle>
+          <AlertDialogDescription>This will permanently delete <strong>{deleteCustomer?.name}</strong> and its customer record.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => void remove()}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }

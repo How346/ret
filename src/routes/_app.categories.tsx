@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Plus, Pencil, Trash2, Tag } from "lucide-react";
@@ -17,6 +18,7 @@ type Category = { id: string; name: string; created_at: string };
 function CategoriesPage() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Partial<Category> | null>(null);
+  const [deleteCategory, setDeleteCategory] = useState<Category | null>(null);
 
   const { data: rows = [] } = useQuery({
     queryKey: ["categories"],
@@ -69,6 +71,7 @@ function CategoriesPage() {
   });
 
   return (
+    <>
     <div className="p-6 space-y-4 max-w-3xl">
       <div className="flex items-center justify-between gap-3">
         <div>
@@ -113,7 +116,7 @@ function CategoriesPage() {
                 <td className="py-2 px-3 text-right">
                   <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditing(c)}><Pencil className="h-3.5 w-3.5" /></Button>
                   <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive"
-                    onClick={() => { if (confirm(`Delete "${c.name}"?`)) del.mutate(c.id); }}>
+                    onClick={() => setDeleteCategory(c)}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </td>
@@ -126,5 +129,18 @@ function CategoriesPage() {
         </table>
       </Card>
     </div>
+    <AlertDialog open={!!deleteCategory} onOpenChange={(open) => !open && setDeleteCategory(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete category?</AlertDialogTitle>
+          <AlertDialogDescription>This will permanently delete <strong>{deleteCategory?.name}</strong>. Products linked to this category may be affected.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={del.isPending} onClick={() => { if (deleteCategory) del.mutate(deleteCategory.id); setDeleteCategory(null); }}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }

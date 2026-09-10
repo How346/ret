@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Pencil, Trash2, Truck } from "lucide-react";
 import { toast } from "sonner";
@@ -35,6 +36,7 @@ function SuppliersPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Supplier | null>(null);
   const [search, setSearch] = useState("");
+  const [deleteSupplier, setDeleteSupplier] = useState<Supplier | null>(null);
 
   const { data: suppliers = [] } = useQuery({
     queryKey: ["suppliers"],
@@ -80,6 +82,7 @@ function SuppliersPage() {
   );
 
   return (
+    <>
     <div className="p-6 space-y-4 h-full overflow-auto">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
@@ -122,7 +125,7 @@ function SuppliersPage() {
                     <Button size="icon" variant="ghost" onClick={() => { setEditing(s); setOpen(true); }}>
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    <Button size="icon" variant="ghost" onClick={() => { if (confirm("Delete supplier?")) remove.mutate(s.id); }}>
+                    <Button size="icon" variant="ghost" onClick={() => setDeleteSupplier(s)}>
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                   </div>
@@ -136,6 +139,19 @@ function SuppliersPage() {
         </Table>
       </Card>
     </div>
+    <AlertDialog open={!!deleteSupplier} onOpenChange={(open) => !open && setDeleteSupplier(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete supplier?</AlertDialogTitle>
+          <AlertDialogDescription>This will permanently delete <strong>{deleteSupplier?.name}</strong> and its supplier record.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={remove.isPending} onClick={() => { if (deleteSupplier) remove.mutate(deleteSupplier.id); setDeleteSupplier(null); }}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 
