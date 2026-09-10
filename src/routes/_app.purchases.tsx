@@ -753,7 +753,11 @@ function ViewPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
     queryFn: async () => {
       const { data: head } = await supabase.from("purchases").select("*").eq("id", id).single();
       const { data: items } = await supabase.from("purchase_items").select("*").eq("purchase_id", id);
-      return { head, items: items ?? [] };
+      const ids = Array.from(new Set((items ?? []).map((r:any)=>r.product_id).filter(Boolean)));
+      const { data: masters } = ids.length ? await supabase.from("products").select("id,gst_rate").in("id", ids) : { data: [] as any[] };
+      const gm = new Map((masters ?? []).map((m:any)=>[m.id, Number(m.gst_rate)||0]));
+      const normalized = (items ?? []).map((r:any)=>({ ...r, gst_rate: (r.gst_rate == null || Number(r.gst_rate) === 0) ? (gm.get(r.product_id) ?? 0) : Number(r.gst_rate) }));
+      return { head, items: normalized };
     },
   });
   return (
@@ -852,7 +856,7 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
       const masterMap = new Map((masters ?? []).map((m:any)=>[m.id,m]));
       setHead(h); setOriginalTotal(Number(h?.total ?? 0)); setBillNo(h?.bill_no ?? ""); setBillDate(h?.bill_date ?? "");
       setSupplierId(h?.supplier_id ?? ""); setPaymentMode(h?.payment_mode ?? "Cash"); setPaid(String(h?.paid ?? 0));
-      setItems((its ?? []).map((r: any) => {
+      const loaded = (its ?? []).map((r: any) => {
         const m:any=masterMap.get(r.product_id) || {};
         const storedGst=Number(r.gst_rate);
         const masterGst=Number(m.gst_rate);
@@ -865,11 +869,19 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
           cost:String(Number.isFinite(storedCost) && storedCost > 0 ? storedCost : (masterCost || 0)),
           mrp:String(Number(r.mrp) > 0 ? r.mrp : (Number(m.mrp) || 0)),
           sale_price:String(Number(r.sale_price) > 0 ? r.sale_price : (Number(m.sale_price) || 0)),
-          // Older purchase rows may contain the default 0 even though the product
-          // master has a GST rate. Show that useful rate while loading the edit.
           gst_rate:String((r.gst_rate === null || r.gst_rate === undefined || storedGst === 0) && masterGst > 0 ? masterGst : (Number.isFinite(storedGst) ? storedGst : masterGst)),
         };
-      }));
+      });
+      // Repair old duplicate rows on load: one product = one row, Qty carries
+      // the combined quantity. This also makes edit calculations deterministic.
+      const merged:LineItem[]=[]; const byPid=new Map<string,LineItem>();
+      for(const row of loaded){
+        const pid=String(row.product_id||"");
+        if(pid && byPid.has(pid)){
+          const ex=byPid.get(pid)!; ex.qty=String((Number(ex.qty)||0)+(Number(row.qty)||0));
+        } else { if(pid) byPid.set(pid,row); merged.push(row); }
+      }
+      setItems(merged);
       setTimeout(() => barcodeRef.current?.focus(), 80);
     })();
   }, [id]);
@@ -907,7 +919,9 @@ function EditPurchaseDialog({ id, onClose }: { id: string; onClose: () => void }
     await supabase.from("purchase_items").delete().eq("purchase_id",id);
     const rows=valid.map(i=>{const q=Number(i.qty),c=Number(i.cost),g=Number(i.gst_rate),line=q*c;return {purchase_id:id,product_id:i.product_id,product_name:i.product_name,barcode:i.barcode||null,hsn_code:i.hsn_code||null,qty:q,cost:c,mrp:Number(i.mrp)||0,sale_price:Number(i.sale_price)||0,gst_rate:g,gst_amount:line*g/100,total:line*(1+g/100)};});
     const {error:ie}=await supabase.from("purchase_items").insert(rows);if(ie)throw ie;
-    for(const i of valid){if(!i.product_id)continue;const qty=Number(i.qty)||0;const {data:p}=await supabase.from("products").select("stock").eq("id",i.product_id).single();if(p)await supabase.from("products").update({stock:Number(p.stock)+qty,purchase_price:Number(i.cost)||0,mrp:Number(i.mrp)||p.mrp,sale_price:Number(i.sale_price)||p.sale_price}).eq("id",i.product_id);if(qty)await supabase.from("stock_ledger").insert({product_id:i.product_id,change:qty,reason:"purchase_edit",ref_id:id});}
+    const addByProduct=new Map<string,{qty:number;cost:number;mrp:number;sale:number}>();
+    for(const i of valid){if(!i.product_id)continue;const pid=i.product_id;const cur=addByProduct.get(pid)??{qty:0,cost:0,mrp:0,sale:0};cur.qty+=Number(i.qty)||0;cur.cost=Number(i.cost)||0;if(Number(i.mrp)>0)cur.mrp=Number(i.mrp);if(Number(i.sale_price)>0)cur.sale=Number(i.sale_price);addByProduct.set(pid,cur);}
+    for(const [pid,a] of addByProduct){const {data:p}=await supabase.from("products").select("stock,mrp,sale_price").eq("id",pid).single();if(p)await supabase.from("products").update({stock:Number(p.stock)+a.qty,purchase_price:a.cost,mrp:a.mrp||p.mrp,sale_price:a.sale||p.sale_price}).eq("id",pid);if(a.qty)await supabase.from("stock_ledger").insert({product_id:pid,change:a.qty,reason:"purchase_edit",ref_id:id});}
     const supplier=suppliers.find(s=>s.id===supplierId);
     const {error:e}=await supabase.from("purchases").update({bill_no:billNo||null,bill_date:billDate,supplier_id:supplierId||null,supplier_name:supplier?.name||null,subtotal:totals.sub,tax_amount:totals.tax,total,paid:Number(paid)||0,payment_mode:paymentMode}).eq("id",id);if(e)throw e;
     toast.success(`Purchase updated · Difference ${diff>=0?"+":"−"}${inr(Math.abs(diff))}`);qc.invalidateQueries();onClose();

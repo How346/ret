@@ -1,4 +1,5 @@
 const { app, BrowserWindow, shell, ipcMain, clipboard, nativeImage } = require("electron");
+const { execFile } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -273,27 +274,23 @@ async function createBillPdf(html, widthPx) {
   }
 }
 
-// Opens WhatsApp Web in the user's own default browser so they can log in
-// (scan the QR code) there — exactly like opening web.whatsapp.com in a
-// normal browser tab. Whichever browser is set as default on this PC is
-// used; Electron does not embed or control it.
+// WhatsApp launcher. Prefer the installed WhatsApp Desktop protocol on
+// Windows, then fall back to the normal browser. This avoids depending on
+// Electron's shell URL association, which can silently fail in packaged EXEs.
+async function launchWindowsUrl(url) {
+  if (process.platform !== "win32") { await shell.openExternal(url); return; }
+  await new Promise((resolve, reject) => {
+    execFile("cmd.exe", ["/c", "start", "", url], { windowsHide: true }, error => error ? reject(error) : resolve());
+  });
+}
+
 ipcMain.handle("whatsapp:open-web", async () => {
-  const url = "https://web.whatsapp.com/";
   try {
-    if (process.platform === "win32") {
-      await new Promise((resolve, reject) => execFile("cmd.exe", ["/c", "start", "", url], { windowsHide: true }, e => e ? reject(e) : resolve()));
-      return { success: true, mode: "desktop-browser" };
-    }
-    await shell.openExternal(url);
+    await launchWindowsUrl("https://web.whatsapp.com/");
     return { success: true, mode: "desktop-browser" };
-  } catch {
-    try {
-      if (whatsappWindow && !whatsappWindow.isDestroyed()) { await whatsappWindow.loadURL(url); whatsappWindow.show(); whatsappWindow.focus(); return { success: true, mode: "embedded-web" }; }
-      whatsappWindow = new BrowserWindow({ width: 1280, height: 900, minWidth: 900, minHeight: 650, show: false, autoHideMenuBar: true, title: "WhatsApp Web", webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, partition: "persist:whatsapp" } });
-      whatsappWindow.on("closed", () => { whatsappWindow = null; });
-      await whatsappWindow.loadURL(url); whatsappWindow.show(); whatsappWindow.focus();
-      return { success: true, mode: "embedded-web" };
-    } catch (err) { return { success: false, errorType: String(err?.message || err) }; }
+  } catch (err) {
+    try { await shell.openExternal("https://web.whatsapp.com/"); return { success: true, mode: "desktop-browser" }; }
+    catch (e) { return { success: false, errorType: String(e?.message || err?.message || err) }; }
   }
 });
 
@@ -304,41 +301,27 @@ async function openWhatsAppChat(phone, message = "") {
   else if (digits.startsWith("00")) digits = digits.slice(2);
   if (!digits) return { success: false, errorType: "missing-phone" };
   const text = encodeURIComponent(String(message || ""));
-  const url = `https://web.whatsapp.com/send?phone=${digits}&text=${text}`;
 
-  // Windows URL handoff through Explorer/CMD is more reliable than relying on
-  // Electron's shell.openExternal when the default browser association is odd.
-  if (process.platform === "win32") {
-    try {
-      await new Promise((resolve, reject) => {
-        execFile("cmd.exe", ["/c", "start", "", url], { windowsHide: true }, error => error ? reject(error) : resolve());
-      });
-      return { success: true, mode: "desktop-browser", url };
-    } catch { /* use embedded fallback */ }
-  } else {
-    try { await shell.openExternal(url); return { success: true, mode: "desktop-browser", url }; }
-    catch { /* use embedded fallback */ }
-  }
-
+  // 1) Installed WhatsApp Desktop, when registered on Windows.
+  const appUrl = `whatsapp://send?phone=${digits}&text=${text}`;
   try {
-    if (whatsappWindow && !whatsappWindow.isDestroyed()) {
-      await whatsappWindow.loadURL(url); whatsappWindow.show(); whatsappWindow.focus();
-      return { success: true, mode: "embedded-web", url };
-    }
-    whatsappWindow = new BrowserWindow({ width: 1280, height: 900, minWidth: 900, minHeight: 650, show: false, autoHideMenuBar: true, title: "WhatsApp Web", webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, partition: "persist:whatsapp" } });
-    whatsappWindow.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
-    whatsappWindow.on("closed", () => { whatsappWindow = null; });
-    whatsappWindow.webContents.setWindowOpenHandler(({ url: childUrl }) => { if (childUrl && /^https?:\/\//.test(childUrl)) shell.openExternal(childUrl); return { action: "deny" }; });
-    await whatsappWindow.loadURL(url); whatsappWindow.show(); whatsappWindow.focus();
-    return { success: true, mode: "embedded-web", url };
-  } catch (embeddedError) {
+    await launchWindowsUrl(appUrl);
+    return { success: true, mode: "desktop-app", url: appUrl };
+  } catch { /* no desktop protocol; continue */ }
+
+  // 2) Browser click-to-chat. Use the Windows shell directly rather than
+  // relying on Electron's URL association handling.
+  const webUrl = `https://web.whatsapp.com/send?phone=${digits}&text=${text}`;
+  try {
+    await launchWindowsUrl(webUrl);
+    return { success: true, mode: "desktop-browser", url: webUrl };
+  } catch {
     try {
-      const fallback = `https://wa.me/${digits}?text=${text}`;
-      if (process.platform === "win32") {
-        await new Promise((resolve, reject) => execFile("cmd.exe", ["/c", "start", "", fallback], { windowsHide: true }, e => e ? reject(e) : resolve()));
-      } else await shell.openExternal(fallback);
-      return { success: true, mode: "desktop-browser", url: fallback };
-    } catch (err) { return { success: false, errorType: String((err && err.message) || embeddedError || err) }; }
+      await shell.openExternal(webUrl);
+      return { success: true, mode: "desktop-browser", url: webUrl };
+    } catch (err) {
+      return { success: false, errorType: String(err?.message || "Could not launch WhatsApp") };
+    }
   }
 }
 

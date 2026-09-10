@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -17,7 +17,18 @@ export const Route = createFileRoute("/_app/reports")({
 
 function ReportsPage() {
   const [from, setFrom] = useState(() => new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
-  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [to, setTo] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date()));
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const refresh = () => {
+      void queryClient.refetchQueries({ queryKey: ["report-sales", from, to] });
+      void queryClient.refetchQueries({ queryKey: ["report-saleitems", from, to] });
+      void queryClient.refetchQueries({ queryKey: ["report-products"] });
+    };
+    window.addEventListener("erp:data-changed", refresh);
+    return () => window.removeEventListener("erp:data-changed", refresh);
+  }, [queryClient, from, to]);
 
   const { data: sales = [] } = useQuery({
     queryKey: ["report-sales", from, to],
@@ -208,7 +219,7 @@ function ReportsPage() {
                     <TableCell>{p.name}</TableCell>
                     <TableCell className="text-right">{p.stock}</TableCell>
                     <TableCell className="text-right font-mono">{inr(p.purchase_price)}</TableCell>
-                    <TableCell className="text-right font-mono">{inr(p.sale_price)}</TableCell>
+                    <TableCell className="text-right font-mono">{inr(p.mrp)}</TableCell>
                     <TableCell className="text-right font-mono font-semibold">{inr(Number(p.stock) * Number(p.purchase_price ?? 0))}</TableCell>
                   </TableRow>
                 ))}

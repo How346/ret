@@ -113,6 +113,13 @@ async function load(): Promise<DbShape | null> {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 export function persist() {
+  // Notify already-mounted screens immediately. The in-memory database is
+  // authoritative during the current session; IndexedDB persistence follows
+  // shortly after. This keeps Reports/Dashboard/Lists in sync even when the
+  // user stays on a mounted route after creating or editing a bill.
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("erp:data-changed"));
+  }
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
