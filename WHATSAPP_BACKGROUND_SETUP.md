@@ -1,32 +1,16 @@
-# Background WhatsApp — Baileys
+# Background WhatsApp bill sending
 
-This build uses `@whiskeysockets/baileys` instead of `whatsapp-web.js`. Baileys connects over WebSockets and does not launch Chromium/Puppeteer, which substantially reduces the background browser overhead.
+This build integrates `whatsapp-web.js` + `qrcode` into Electron.
 
-## Install
+- `electron/main.cjs`: LocalAuth, headless Puppeteer, QR generation, IPC `send-bill-image`.
+- `electron/preload.cjs`: exposes WhatsApp status/QR/send APIs safely through contextBridge.
+- `src/lib/whatsapp-send.ts`: renders the complete bill to a PNG data URL and sends the raw base64 payload plus the configured message to the main process; the message is sent as the WhatsApp image caption.
+- `src/components/whatsapp-qr-panel.tsx`: native in-app QR/status UI.
+- `src/routes/_app.settings.tsx`: shows the QR connection panel in Settings → WhatsApp.
+- `src/routes/_app.sales.tsx`: reserves a fixed action column so the Remove button stays visible.
 
-```bash
-bun install
-```
+The packaged app must install dependencies before building:
 
-The project pins Baileys to `6.7.24` rather than the newer 7.x release candidates because 7.x introduces breaking API changes. The app also uses `pino` for a silent production logger and `qrcode` for the Settings QR display.
+`npm install`
 
-## Authentication
-
-The first connection shows a QR code in **Settings → WhatsApp**. Scan it from WhatsApp → Linked devices. Baileys persists its credentials and Signal keys under Electron's userData directory: `whatsapp-baileys-auth`. The auth folder contains long-lived credentials and must never be committed to source control.
-
-## Sending bills
-
-The POS renders the complete invoice to PNG in memory, then sends one WhatsApp image message. The Settings message template is sent as the image caption, so there is no separate race between an image and text message. No bill image is saved to disk by the Baileys send path.
-
-## Performance
-
-- No Chromium/Puppeteer process.
-- No WhatsApp Web page rendering.
-- `makeCacheableSignalKeyStore` reduces repeated Signal-key disk I/O.
-- Full history sync is disabled because the ERP only needs outbound bill sharing.
-- `markOnlineOnConnect: false` avoids unnecessarily changing the account's online state.
-- Automatic reconnect uses a bounded backoff.
-
-## Important
-
-Baileys is an unofficial WhatsApp Web API. Use it responsibly and comply with WhatsApp's terms; do not use the integration for spam or bulk messaging.
+or use the repository's normal package-manager install step. Node 18+ is required by whatsapp-web.js.
