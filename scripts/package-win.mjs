@@ -56,7 +56,7 @@ const paths = await packager({
   // Note: modern @electron/packager hooks are promise-based (no callback
   // argument) — throwing/rejecting here fails the whole packaging step.
   afterCopy: [
-    async (buildPath) => {
+    async ({ buildPath }) => {
       console.log('Obfuscating shipped source before finalizing the package…');
       await obfuscateElectronMainProcess(buildPath);
       await obfuscateRendererBundle(buildPath);
