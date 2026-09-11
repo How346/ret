@@ -4,37 +4,32 @@ const fs = require("node:fs");
 const os = require("node:os");
 const { getHWID, readStoredLicenseAsync, installLicenseAsync, removeLicense } = require("./license.cjs");
 
-// Keep hidden/background Chromium work responsive instead of allowing Chromium
-// background throttling to delay WhatsApp events and sends.
-app.commandLine.appendSwitch("disable-background-timer-throttling");
-app.commandLine.appendSwitch("disable-renderer-backgrounding");
-app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
-
 let mainWindow = null;
 
 // ---------------------------------------------------------------------------
-// Background WhatsApp bill-image sender (whatsapp-web.js)
+// Background WhatsApp bill-image sender (Baileys)
 // ---------------------------------------------------------------------------
+// Baileys talks to WhatsApp over WebSockets and does not launch Chromium.
+// The authenticated Signal keys are stored locally under Electron's userData.
 
-const WHATSAPP_USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
-let whatsappWebJs = null;
+let baileys = null;
+let baileysPino = null;
 let QRCode = null;
-let puppeteer = null;
-let whatsappClient = null;
+let whatsappSocket = null;
 let whatsappReady = false;
 let whatsappQrDataUrl = null;
 let whatsappInitializing = false;
 let whatsappInitPromise = null;
 let whatsappLastError = null;
+let whatsappReconnectTimer = null;
+let whatsappReconnectAttempts = 0;
 
-function loadWhatsAppDependencies() {
+async function loadWhatsAppDependencies() {
   try {
-    if (!whatsappWebJs) whatsappWebJs = require("whatsapp-web.js");
+    if (!baileys) baileys = await import("@whiskeysockets/baileys");
+    if (!baileysPino) baileysPino = (await import("pino")).default;
     if (!QRCode) QRCode = require("qrcode");
-    if (!puppeteer) puppeteer = require("puppeteer");
-    return { whatsappWebJs, QRCode, puppeteer };
+    return { baileys, pino: baileysPino, QRCode };
   } catch (error) {
     const e = new Error(
       `WhatsApp dependency error: ${error?.message || error}. Run "bun install" before building the Windows app.`
@@ -42,40 +37,6 @@ function loadWhatsAppDependencies() {
     e.cause = error;
     throw e;
   }
-}
-
-function findChromeExecutable() {
-  const candidates = [];
-  if (process.platform === "win32") {
-    const programFiles = process.env.ProgramFiles || "C:\\Program Files";
-    const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
-    const localAppData = process.env.LOCALAPPDATA || "";
-    candidates.push(
-      path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
-      path.join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
-      path.join(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
-    );
-  }
-  for (const candidate of candidates) {
-    try { if (candidate && fs.existsSync(candidate)) return candidate; } catch { /* ignore */ }
-  }
-  return null;
-}
-
-function resolveWhatsAppBrowser() {
-  const { puppeteer: p } = loadWhatsAppDependencies();
-  try {
-    const bundled = typeof p.executablePath === "function" ? p.executablePath() : null;
-    if (bundled && fs.existsSync(bundled)) return bundled;
-  } catch { /* Puppeteer cache may not be present in the packaged app. */ }
-  const system = findChromeExecutable();
-  if (system) return system;
-  throw new Error(
-    "No Chromium/Chrome browser was found for WhatsApp. Install Google Chrome or Microsoft Edge, then restart the billing software."
-  );
 }
 
 function sendWhatsAppEvent(channel, payload) {
@@ -92,139 +53,223 @@ function cleanWhatsAppPhone(phone) {
   return clean;
 }
 
+function whatsappJidFromPhone(phone) {
+  return `${phone}@s.whatsapp.net`;
+}
+
 function whatsappErrorMessage(error) {
-  if (!error) return "Unknown WhatsApp error";
-  const message = String(error?.message || error);
-  const stack = String(error?.stack || "");
-  if (/cannot find module.*whatsapp-web\.js/i.test(message)) {
-    return "WhatsApp module is missing. Run bun install and rebuild the Windows app.";
+  if (error == null) return "Unknown WhatsApp error";
+
+  const candidates = [
+    error?.message,
+    error?.output?.payload?.message,
+    error?.output?.payload?.error,
+    error?.output?.message,
+    error?.data?.message,
+    typeof error === "string" ? error : null,
+  ].filter((value) => value != null && String(value).trim());
+
+  const message = String(candidates[0] || "Unknown WhatsApp error").trim();
+
+  if (/cannot find module.*baileys/i.test(message)) {
+    return "WhatsApp Baileys module is missing. Run bun install and rebuild the Windows app.";
   }
-  if (/could not find chrome|failed to launch the browser|executable doesn't exist/i.test(message)) {
-    return "WhatsApp browser could not start. Install/update Google Chrome or Microsoft Edge and restart the app.";
+  if (/logged out|401/i.test(message)) {
+    return "WhatsApp was logged out. Connect WhatsApp again from Settings → WhatsApp.";
   }
-  return stack && stack !== message ? message : message;
+  if (/connection closed|428|405|connection failure/i.test(message)) {
+    return "WhatsApp connection closed. Please wait a moment and try again. If this continues, reconnect WhatsApp from Settings → WhatsApp.";
+  }
+  return message;
 }
 
-function resetWhatsAppClient() {
+
+function clearWhatsAppReconnectTimer() {
+  if (whatsappReconnectTimer) {
+    clearTimeout(whatsappReconnectTimer);
+    whatsappReconnectTimer = null;
+  }
+}
+
+function destroyWhatsAppSocket() {
+  const socket = whatsappSocket;
+  whatsappSocket = null;
   whatsappReady = false;
-  whatsappQrDataUrl = null;
-  const client = whatsappClient;
-  whatsappClient = null;
-  try { client?.removeAllListeners?.(); } catch { /* ignore */ }
-  try { client?.destroy?.(); } catch { /* ignore */ }
+  try { socket?.end?.(undefined); } catch { /* socket is already closed */ }
 }
 
-async function initializeWhatsApp() {
-  if (whatsappReady && whatsappClient) return { ready: true, qr: null };
+async function clearWhatsAppAuthState() {
+  try {
+    const authPath = path.join(app.getPath("userData"), "whatsapp-baileys-auth");
+    await fs.promises.rm(authPath, { recursive: true, force: true });
+  } catch { /* best effort; next connection can still report the real error */ }
+}
+
+function scheduleWhatsAppReconnect() {
+  clearWhatsAppReconnectTimer();
+  if (whatsappReconnectTimer || whatsappInitializing) return;
+  whatsappReconnectAttempts = Math.min(whatsappReconnectAttempts + 1, 8);
+  const delay = Math.min(1500 * Math.pow(1.6, whatsappReconnectAttempts - 1), 15000);
+  whatsappReconnectTimer = setTimeout(() => {
+    whatsappReconnectTimer = null;
+    void initializeWhatsApp({ silent: true });
+  }, delay);
+}
+
+async function initializeWhatsApp(options = {}) {
+  if (whatsappReady && whatsappSocket) return { ready: true, qr: null };
   if (whatsappInitPromise) return whatsappInitPromise;
 
   whatsappInitPromise = (async () => {
     whatsappInitializing = true;
     whatsappLastError = null;
     try {
-      const { whatsappWebJs: wjs, QRCode: qrCode } = loadWhatsAppDependencies();
-      const { Client, LocalAuth } = wjs;
-      const executablePath = resolveWhatsAppBrowser();
-      const sessionPath = path.join(app.getPath("userData"), "whatsapp-session");
+      const { baileys: b, pino, QRCode: qrCode } = await loadWhatsAppDependencies();
+      const {
+        DisconnectReason,
+        useMultiFileAuthState,
+        makeCacheableSignalKeyStore,
+        Browsers,
+        fetchLatestWaWebVersion,
+      } = b;
+      const makeWASocket = b.default || b.makeWASocket;
 
-      resetWhatsAppClient();
-      whatsappClient = new Client({
-        authStrategy: new LocalAuth({ clientId: "margin-erp", dataPath: sessionPath }),
+      if (typeof makeWASocket !== "function") {
+        throw new Error("Baileys makeWASocket export is unavailable. Reinstall dependencies and rebuild.");
+      }
 
-        // Keep WhatsApp Web's version cached between launches. The strict remote
-        // cache prevents an unexpected/incompatible Web build from being used.
-        // Do not make startup depend on an exact remote WhatsApp Web cache manifest.
-        // WhatsApp changes its web client frequently; non-strict mode lets
-        // whatsapp-web.js fall back instead of surfacing an opaque startup error.
-        webVersionCache: {
-          type: "remote",
-          strict: false,
+      const authPath = path.join(app.getPath("userData"), "whatsapp-baileys-auth");
+      await fs.promises.mkdir(authPath, { recursive: true });
+      const { state, saveCreds } = await useMultiFileAuthState(authPath);
+      const logger = pino({ level: "silent" });
+
+      whatsappQrDataUrl = null;
+      whatsappReady = false;
+      destroyWhatsAppSocket();
+
+      // WhatsApp Web changes its client revision frequently. Using the bundled
+      // revision can cause fresh pairing/connection failures. Prefer the live
+      // WhatsApp Web revision, but never block startup if the network is down.
+      let waVersion;
+      if (typeof fetchLatestWaWebVersion === "function") {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 8000);
+          try {
+            const latest = await fetchLatestWaWebVersion({ signal: controller.signal });
+            if (Array.isArray(latest?.version) && latest.version.length === 3) {
+              waVersion = latest.version;
+            }
+          } finally {
+            clearTimeout(timeout);
+          }
+        } catch {
+          // Offline startup is still supported; Baileys will use its bundled version.
+        }
+      }
+
+      whatsappSocket = makeWASocket({
+        auth: {
+          creds: state.creds,
+          keys: makeCacheableSignalKeyStore(state.keys, logger),
         },
-
-        puppeteer: {
-          headless: true,
-          executablePath,
-          timeout: 60000,
-          protocolTimeout: 120000,
-          dumpio: false,
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-accelerated-2d-canvas",
-            "--no-first-run",
-            "--no-zygote",
-            "--disable-gpu",
-            "--disable-extensions",
-            "--disable-software-rasterizer",
-            "--disable-background-networking",
-            "--disable-background-timer-throttling",
-            "--disable-renderer-backgrounding",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-sync",
-            "--disable-component-update",
-            "--disable-breakpad",
-            "--disable-default-apps",
-            "--no-default-browser-check",
-            "--disable-popup-blocking",
-            "--mute-audio",
-            "--password-store=basic",
-            "--use-mock-keychain",
-            `--user-agent=${WHATSAPP_USER_AGENT}`,
-          ],
-        },
+        ...(waVersion ? { version: waVersion } : {}),
+        logger,
+        browser: Browsers?.windows?.("Margin ERP Offline") || ["Windows", "Chrome", "Margin ERP Offline"],
+        markOnlineOnConnect: false,
+        syncFullHistory: false,
+        fireInitQueries: true,
+        generateHighQualityLinkPreview: false,
+        connectTimeoutMs: 30000,
+        defaultQueryTimeoutMs: 30000,
+        keepAliveIntervalMs: 25000,
+        retryRequestDelayMs: 250,
+        emitOwnEvents: false,
       });
 
-      whatsappClient.on("qr", async (qr) => {
-        whatsappReady = false;
+      const socket = whatsappSocket;
+      socket.ev.on("creds.update", saveCreds);
+
+      socket.ev.on("connection.update", async (update) => {
         try {
-          whatsappQrDataUrl = await qrCode.toDataURL(qr, {
-            margin: 1, width: 320, errorCorrectionLevel: "M",
-          });
-          sendWhatsAppEvent("whatsapp-qr", whatsappQrDataUrl);
-        } catch (error) {
-          whatsappLastError = whatsappErrorMessage(error);
-          sendWhatsAppEvent("whatsapp-error", { error: whatsappLastError });
+          const { connection, lastDisconnect, qr } = update || {};
+
+          if (qr) {
+          whatsappReady = false;
+          try {
+            whatsappQrDataUrl = await qrCode.toDataURL(qr, {
+              margin: 1,
+              width: 320,
+              errorCorrectionLevel: "M",
+            });
+            sendWhatsAppEvent("whatsapp-qr", whatsappQrDataUrl);
+          } catch (error) {
+            whatsappLastError = whatsappErrorMessage(error);
+            sendWhatsAppEvent("whatsapp-error", { error: whatsappLastError });
+          }
+        }
+
+        if (connection === "open") {
+          whatsappReady = true;
+          whatsappQrDataUrl = null;
+          whatsappLastError = null;
+          whatsappReconnectAttempts = 0;
+          clearWhatsAppReconnectTimer();
+          sendWhatsAppEvent("whatsapp-ready", { ready: true });
+          return;
+        }
+
+        if (connection === "close") {
+          whatsappReady = false;
+          whatsappQrDataUrl = null;
+
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          const loggedOut = statusCode === DisconnectReason.loggedOut;
+          const connectionReplaced = statusCode === DisconnectReason.connectionReplaced;
+          const reason = loggedOut
+            ? "WhatsApp session was logged out. Connect again from Settings → WhatsApp."
+            : connectionReplaced
+              ? "WhatsApp connection was replaced by another linked session."
+              : whatsappErrorMessage(lastDisconnect?.error || "Connection closed");
+
+          whatsappLastError = reason;
+          sendWhatsAppEvent("whatsapp-disconnected", { reason, loggedOut, statusCode });
+          destroyWhatsAppSocket();
+
+          if (loggedOut) {
+            await clearWhatsAppAuthState();
+            whatsappReconnectAttempts = 0;
+            sendWhatsAppEvent("whatsapp-error", { error: reason });
+          } else if (!connectionReplaced) {
+            scheduleWhatsAppReconnect();
+          } else {
+            sendWhatsAppEvent("whatsapp-error", { error: reason });
+          }
+          }
+        } catch (handlerError) {
+          const safeError = whatsappErrorMessage(handlerError);
+          whatsappLastError = safeError;
+          sendWhatsAppEvent("whatsapp-error", { error: safeError });
         }
       });
 
-      whatsappClient.on("authenticated", () => {
+      // Keep this listener intentionally small. We do not download/sync chat history.
+      socket.ev.on("messages.update", () => {});
+
+      if (state.creds.registered) {
         sendWhatsAppEvent("whatsapp-authenticated", { authenticated: true });
-      });
+      }
 
-      whatsappClient.on("ready", () => {
-        whatsappReady = true;
-        whatsappLastError = null;
-        whatsappQrDataUrl = null;
-        sendWhatsAppEvent("whatsapp-ready", { ready: true });
-      });
-
-      whatsappClient.on("auth_failure", (message) => {
-        whatsappReady = false;
-        whatsappQrDataUrl = null;
-        whatsappLastError = `WhatsApp authentication failed: ${String(message || "Unknown authentication failure")}`;
-        sendWhatsAppEvent("whatsapp-error", { error: whatsappLastError });
-      });
-
-      whatsappClient.on("disconnected", (reason) => {
-        whatsappReady = false;
-        whatsappQrDataUrl = null;
-        whatsappLastError = `WhatsApp disconnected: ${String(reason || "Disconnected")}`;
-        sendWhatsAppEvent("whatsapp-disconnected", { reason: String(reason || "Disconnected") });
-        resetWhatsAppClient();
-      });
-
-      whatsappClient.on("change_state", (state) => {
-        sendWhatsAppEvent("whatsapp-state", { state: String(state || "") });
-      });
-
-      await whatsappClient.initialize();
-      return { ready: whatsappReady, qr: whatsappQrDataUrl, error: whatsappLastError || undefined };
+      return {
+        ready: whatsappReady,
+        qr: whatsappQrDataUrl,
+        error: whatsappLastError || undefined,
+      };
     } catch (error) {
       whatsappLastError = whatsappErrorMessage(error);
-      resetWhatsAppClient();
+      destroyWhatsAppSocket();
       sendWhatsAppEvent("whatsapp-error", { error: whatsappLastError });
-      return { ready: false, qr: null, error: whatsappLastError };
+      return { ready: false, qr: whatsappQrDataUrl, error: whatsappLastError };
     } finally {
       whatsappInitializing = false;
       whatsappInitPromise = null;
@@ -243,16 +288,28 @@ ipcMain.handle("whatsapp:status", async () => ({
   error: whatsappLastError,
 }));
 
-// Send the bill image with the configured WhatsApp message as its caption.
-// The PNG exists only in memory; no bill image file is written to disk.
+// Completely reset only the Baileys WhatsApp session. This is useful when a
+// previous/corrupt linked-device state is left behind after an app upgrade.
+ipcMain.handle("whatsapp:reset", async () => {
+  try {
+    clearWhatsAppReconnectTimer();
+    destroyWhatsAppSocket();
+    await clearWhatsAppAuthState();
+    whatsappQrDataUrl = null;
+    whatsappLastError = null;
+    whatsappReconnectAttempts = 0;
+    return await initializeWhatsApp();
+  } catch (error) {
+    const safeError = whatsappErrorMessage(error);
+    whatsappLastError = safeError;
+    return { ready: false, qr: null, error: safeError };
+  }
+});
+
+// Sends one WhatsApp message containing the complete PNG bill and the configured
+// message as its caption. The PNG stays in memory and is never written to disk.
 ipcMain.handle("send-bill-image", async (_event, payload) => {
   try {
-    const deps = loadWhatsAppDependencies();
-    const MessageMedia = deps?.whatsappWebJs?.MessageMedia;
-    if (!MessageMedia) {
-      return { success: false, errorType: "WhatsApp media service is unavailable. Rebuild the Windows app after installing dependencies." };
-    }
-
     const raw = String(payload?.base64Image || "").trim();
     const base64Image = raw.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
     const phone = cleanWhatsAppPhone(payload?.phone);
@@ -264,53 +321,87 @@ ipcMain.handle("send-bill-image", async (_event, payload) => {
       return { success: false, errorType: "WhatsApp number must include a valid country code." };
     }
 
-    if (!whatsappClient || !whatsappReady) {
+    const imageBuffer = Buffer.from(base64Image, "base64");
+    if (!imageBuffer.length) return { success: false, errorType: "Bill image could not be decoded." };
+    if (imageBuffer.length > 15 * 1024 * 1024) {
+      return { success: false, errorType: "Bill image is too large. Reduce the invoice image size and try again." };
+    }
+
+    if (!whatsappSocket || !whatsappReady) {
       const status = await initializeWhatsApp();
-      if (!status?.ready || !whatsappClient || !whatsappReady) {
+      if (!status.ready || !whatsappSocket || !whatsappReady) {
         return {
           success: false,
-          errorType: status?.error || whatsappLastError || "WhatsApp is not connected. Scan the QR code in Settings → WhatsApp first.",
-          qr: status?.qr || whatsappQrDataUrl || null,
+          errorType: status.error || "WhatsApp is not connected. Scan the QR code in Settings → WhatsApp first.",
+          qr: whatsappQrDataUrl,
         };
       }
     }
 
-    let imageBuffer;
+    const jid = whatsappJidFromPhone(phone);
+    const socket = whatsappSocket;
+    if (!socket) return { success: false, errorType: "WhatsApp connection is unavailable. Try again." };
+
+    // Verify the number first so an invalid/non-WhatsApp number produces a clear
+    // error instead of a confusing send failure.
+    let resolvedJid = jid;
     try {
-      imageBuffer = Buffer.from(base64Image, "base64");
-      if (!imageBuffer.length) throw new Error("empty image");
+      if (typeof socket.onWhatsApp === "function") {
+        const result = await socket.onWhatsApp(jid);
+        const firstResult = Array.isArray(result) ? result[0] : null;
+        if (firstResult && firstResult.exists === false) {
+          return { success: false, errorType: "This phone number is not registered on WhatsApp." };
+        }
+        if (firstResult?.jid) resolvedJid = firstResult.jid;
+      }
     } catch {
-      return { success: false, errorType: "The generated bill image is invalid." };
+      // A transient lookup failure should not block a valid send; send using the
+      // canonical PN JID and let WhatsApp return the definitive result.
     }
 
-    // Never guess a chat id when WhatsApp returns null. That previously caused
-    // opaque library exceptions which ended up as the renderer's null.message error.
-    let chatId = null;
+    const sendPayload = {
+      image: imageBuffer,
+      mimetype: "image/png",
+      fileName: "bill.png",
+      ...(message ? { caption: message } : {}),
+    };
+
+    const sendOnce = async (activeSocket) => Promise.race([
+      activeSocket.sendMessage(resolvedJid, sendPayload),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("WhatsApp send timed out. Please try again.")), 45000)
+      ),
+    ]);
+
+    let sendResult;
     try {
-      const numberId = await whatsappClient.getNumberId(phone);
-      chatId = numberId?._serialized || null;
-    } catch {
-      chatId = null;
+      sendResult = await sendOnce(socket);
+    } catch (firstSendError) {
+      const firstMessage = whatsappErrorMessage(firstSendError);
+      const looksLikeClosedConnection = /connection closed|connection failure|timed out|reading 'message'/i.test(firstMessage);
+      if (!looksLikeClosedConnection) throw firstSendError;
+
+      // The socket can become stale between the ready check and media upload.
+      // Reconnect once and retry the same in-memory image instead of exposing a
+      // raw Baileys null/connection error to the cashier.
+      whatsappReady = false;
+      const status = await initializeWhatsApp({ silent: true });
+      if (!status.ready || !whatsappSocket) {
+        throw new Error(status.error || "WhatsApp connection was lost. Please try again.");
+      }
+      sendResult = await sendOnce(whatsappSocket);
     }
 
-    if (!chatId) {
-      return {
-        success: false,
-        errorType: "This number is not available on WhatsApp, or WhatsApp could not resolve the number. Check the country code and try again.",
-      };
+    if (!sendResult) {
+      return { success: false, errorType: "WhatsApp did not return a send result." };
     }
 
-    const media = new MessageMedia("image/png", imageBuffer.toString("base64"), "bill.png");
-    const sendOptions = message
-      ? { sendMediaAsDocument: false, caption: message }
-      : { sendMediaAsDocument: false };
-
-    const sent = await whatsappClient.sendMessage(chatId, media, sendOptions);
-    if (!sent) {
-      return { success: false, errorType: "WhatsApp did not confirm the bill image was sent." };
-    }
-
-    return { success: true, phone, imaged: true, messaged: !!message };
+    return {
+      success: true,
+      imaged: true,
+      messaged: !!message,
+      messageId: sendResult?.key?.id || null,
+    };
   } catch (error) {
     const message = whatsappErrorMessage(error);
     whatsappLastError = message;

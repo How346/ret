@@ -172,33 +172,18 @@ export async function sendReceiptOnWhatsApp(opts: {
       const imageDataUrl = await renderBillImageDataUrl(opts.html, widthPx);
       const base64 = imageDataUrl.replace(/^data:image\/png;base64,/, "");
       const res = await window.electronAPI.sendBillImage(base64, opts.phone, opts.message || "");
-      if (!res || typeof res !== "object") {
-        return {
-          success: false,
-          mode: "background-whatsapp",
-          errorType: "WhatsApp service returned no response. Please reconnect WhatsApp and try again.",
-        };
-      }
-      const safeError = typeof res.errorType === "string" && res.errorType.trim()
-        ? res.errorType.trim()
-        : undefined;
       return {
-        success: res.success === true,
+        success: !!res?.success,
         mode: "background-whatsapp",
-        imaged: res.imaged === true || res.success === true,
-        messaged: res.messaged === true,
-        errorType: safeError,
+        imaged: !!res?.imaged || !!res?.success,
+        messaged: !!res?.messaged,
+        errorType: res?.errorType,
       };
-    } catch (err: unknown) {
-      const message = err instanceof Error
-        ? err.message
-        : typeof err === "string"
-          ? err
-          : "WhatsApp sending failed unexpectedly.";
+    } catch (err: any) {
       return {
         success: false,
         mode: "background-whatsapp",
-        errorType: message || "WhatsApp sending failed unexpectedly.",
+        errorType: String(err?.message || err),
       };
     }
   }
@@ -208,19 +193,4 @@ export async function sendReceiptOnWhatsApp(opts: {
     mode: "web-text-only",
     errorType: "Background WhatsApp sending is available only in the Windows desktop app.",
   };
-}
-
-// Opens WhatsApp Web in the user's own default browser on this PC, so they
-// can log in (scan the QR code) there once — same as opening
-// web.whatsapp.com in any ordinary browser tab.
-export async function openWhatsAppWeb(): Promise<{ success: boolean; errorType?: string }> {
-  if (isDesktopPrintingAvailable() && window.electronAPI?.openWhatsAppWeb) {
-    try {
-      return await window.electronAPI.openWhatsAppWeb();
-    } catch (err: any) {
-      return { success: false, errorType: String(err?.message || err) };
-    }
-  }
-  window.open("https://web.whatsapp.com", "_blank");
-  return { success: true };
 }

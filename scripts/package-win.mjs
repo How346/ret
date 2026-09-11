@@ -13,10 +13,8 @@ const electronVersion = JSON.parse(
   readFileSync(require.resolve('electron/package.json'), 'utf8'),
 ).version;
 
-// Ensure runtime dependencies are actually present before Electron Packager copies the app.
-// This is important when the project was installed with Bun: a later npm-prune step can
-// otherwise leave whatsapp-web.js out of the packaged application.
-for (const dep of ['whatsapp-web.js', 'qrcode']) {
+// Ensure the Baileys runtime dependencies are installed before Electron Packager copies the app.
+for (const dep of ['@whiskeysockets/baileys', 'pino', 'qrcode']) {
   try { require.resolve(dep, { paths: [root] }); }
   catch {
     console.log(`Installing missing runtime dependency: ${dep}`);

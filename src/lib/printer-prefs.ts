@@ -18,26 +18,13 @@ type ElectronPrintAPI = {
     html: string,
     options?: { deviceName?: string; silent?: boolean; copies?: number },
   ) => Promise<{ success: boolean; errorType?: string }>;
-  openWhatsAppWeb: () => Promise<{ success: boolean; errorType?: string }>;
-  sendReceiptWhatsAppWeb: (
-    html: string,
-    phone: string,
-    message: string,
-    widthPx?: number,
-  ) => Promise<{ success: boolean; errorType?: string; imaged?: boolean; pdfOpened?: boolean }>;
-  sendReceiptWhatsAppImage: (
-    imageDataUrl: string,
-    phone: string,
-    message: string,
-    html?: string,
-    widthPx?: number,
-  ) => Promise<{ success: boolean; errorType?: string; imaged?: boolean; pdfOpened?: boolean }>;
   getHWID: () => Promise<{ hwid: string }>;
   getLicenseStatus: () => Promise<OfflineLicenseStatus>;
   installLicense: (licenseText: string) => Promise<OfflineLicenseStatus>;
   removeLicense: () => Promise<OfflineLicenseStatus>;
-  initializeWhatsApp?: () => Promise<{ ready: boolean; qr?: string | null }>;
-  getWhatsAppStatus?: () => Promise<{ ready: boolean; qr?: string | null; initializing?: boolean }>;
+  initializeWhatsApp?: () => Promise<{ ready: boolean; qr?: string | null; error?: string | null }>;
+  getWhatsAppStatus?: () => Promise<{ ready: boolean; qr?: string | null; initializing?: boolean; error?: string | null }>;
+  resetWhatsApp?: () => Promise<{ ready: boolean; qr?: string | null; error?: string | null }>;
   sendBillImage?: (base64Image: string, phone: string, message: string) => Promise<{ success: boolean; errorType?: string; qr?: string | null; imaged?: boolean; messaged?: boolean }>;
   onWhatsAppQr?: (callback: (dataUrl: string) => void) => () => void;
   onWhatsAppReady?: (callback: (payload: any) => void) => () => void;

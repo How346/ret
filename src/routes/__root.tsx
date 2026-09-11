@@ -24,32 +24,14 @@ function NotFoundComponent() {
   );
 }
 
-function ErrorComponent({ error, reset }: { error: unknown; reset: () => void }) {
-  // TanStack Router can surface a null/unknown thrown value from a failed
-  // async boundary. Never let the error screen itself throw while trying to
-  // read `.message`, otherwise the real WhatsApp/IPC error gets replaced by
-  // the misleading "Cannot read properties of null (reading message)" screen.
-  const safeMessage = (() => {
-    if (error instanceof Error && error.message) return error.message;
-    if (typeof error === "string" && error.trim()) return error;
-    if (error && typeof error === "object") {
-      const candidate = (error as { message?: unknown }).message;
-      if (typeof candidate === "string" && candidate.trim()) return candidate;
-      try {
-        const json = JSON.stringify(error);
-        if (json && json !== "{}") return json;
-      } catch { /* ignore unserializable errors */ }
-    }
-    return "An unexpected error occurred. Please try again.";
-  })();
-
-  console.error("Route error:", error);
+function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
+  console.error(error);
   const router = useRouter();
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
         <h1 className="text-xl font-semibold">Something went wrong</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{safeMessage}</p>
+        <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
         <button
           onClick={() => { router.invalidate(); reset(); }}
           className="mt-6 inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
