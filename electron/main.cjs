@@ -117,7 +117,7 @@ function scheduleWhatsAppReconnect() {
 }
 
 async function initializeWhatsApp(options = {}) {
-  if (whatsappReady && whatsappSocket) return { ready: true, qr: null };
+  if (whatsappReady && whatsappSocket) return { ready: true, qr: null, error: null };
   if (whatsappInitPromise) return whatsappInitPromise;
 
   whatsappInitPromise = (async () => {
@@ -178,13 +178,14 @@ async function initializeWhatsApp(options = {}) {
         browser: Browsers?.windows?.("Margin ERP Offline") || ["Windows", "Chrome", "Margin ERP Offline"],
         markOnlineOnConnect: false,
         syncFullHistory: false,
-        fireInitQueries: true,
+        fireInitQueries: false,
         generateHighQualityLinkPreview: false,
         connectTimeoutMs: 30000,
         defaultQueryTimeoutMs: 30000,
         keepAliveIntervalMs: 25000,
         retryRequestDelayMs: 250,
         emitOwnEvents: false,
+        shouldSyncHistoryMessage: () => false,
       });
 
       const socket = whatsappSocket;
@@ -282,10 +283,10 @@ async function initializeWhatsApp(options = {}) {
 ipcMain.handle("whatsapp:initialize", async () => initializeWhatsApp());
 
 ipcMain.handle("whatsapp:status", async () => ({
-  ready: whatsappReady,
-  qr: whatsappQrDataUrl,
-  initializing: whatsappInitializing,
-  error: whatsappLastError,
+  ready: !!whatsappReady,
+  qr: whatsappQrDataUrl || null,
+  initializing: !!whatsappInitializing,
+  error: whatsappLastError || null,
 }));
 
 // Completely reset only the Baileys WhatsApp session. This is useful when a
@@ -342,22 +343,10 @@ ipcMain.handle("send-bill-image", async (_event, payload) => {
     const socket = whatsappSocket;
     if (!socket) return { success: false, errorType: "WhatsApp connection is unavailable. Try again." };
 
-    // Verify the number first so an invalid/non-WhatsApp number produces a clear
-    // error instead of a confusing send failure.
-    let resolvedJid = jid;
-    try {
-      if (typeof socket.onWhatsApp === "function") {
-        const result = await socket.onWhatsApp(jid);
-        const firstResult = Array.isArray(result) ? result[0] : null;
-        if (firstResult && firstResult.exists === false) {
-          return { success: false, errorType: "This phone number is not registered on WhatsApp." };
-        }
-        if (firstResult?.jid) resolvedJid = firstResult.jid;
-      }
-    } catch {
-      // A transient lookup failure should not block a valid send; send using the
-      // canonical PN JID and let WhatsApp return the definitive result.
-    }
+    // Do not perform a separate onWhatsApp query here. It adds an extra network
+    // round-trip and, on some WA revisions, can return an incomplete/null node.
+    // Sending directly to the canonical PN JID is both faster and more reliable.
+    const resolvedJid = jid;
 
     const sendPayload = {
       image: imageBuffer,
