@@ -1362,7 +1362,7 @@ function WhatsAppSendDialog({
           <p className="text-xs text-muted-foreground">
             The complete bill is rendered in memory and sent as a PNG image with your configured message as the WhatsApp caption. No bill image file is created and no browser window is opened.
           </p>
-          {ask.message && (
+          {ask?.message && (
             <div className="rounded-lg border bg-muted/40 p-3">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Message</div>
               <div className="text-sm whitespace-pre-wrap break-words">{ask.message}</div>

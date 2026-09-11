@@ -22,31 +22,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
+    let cancelled = false;
+    let subscription: { unsubscribe?: () => void } | null = null;
+
+    const applySession = (s: Session | null) => {
+      if (cancelled) return;
       setSession(s);
+      setRole(null);
       if (s?.user) {
-        // defer role fetch to avoid deadlocks
-        setTimeout(async () => {
-          const { data } = await supabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", s.user.id)
-            .order("role", { ascending: true })
-            .limit(1)
-            .maybeSingle();
-          setRole((data?.role as Role) ?? "cashier");
+        // Role lookup must never be allowed to break application startup.
+        setTimeout(() => {
+          void (async () => {
+            try {
+              const result = await supabase
+                .from("user_roles")
+                .select("role")
+                .eq("user_id", s.user.id)
+                .order("role", { ascending: true })
+                .limit(1)
+                .maybeSingle();
+              if (!cancelled) setRole((result?.data?.role as Role) ?? "cashier");
+            } catch (error) {
+              console.error("[Margin ERP] offline role lookup failed", error);
+              if (!cancelled) setRole("cashier");
+            }
+          })();
         }, 0);
-      } else {
-        setRole(null);
       }
-    });
+    };
 
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s);
-      setLoading(false);
-    });
+    try {
+      const result = supabase.auth.onAuthStateChange((_event: string, s: Session | null) => {
+        applySession(s);
+        if (!cancelled) setLoading(false);
+      });
+      subscription = result?.data?.subscription ?? null;
+    } catch (error) {
+      console.error("[Margin ERP] auth listener failed", error);
+      if (!cancelled) {
+        setSession(null);
+        setRole(null);
+        setLoading(false);
+      }
+    }
 
-    return () => subscription.unsubscribe();
+    void (async () => {
+      try {
+        const result = await supabase.auth.getSession();
+        applySession(result?.data?.session ?? null);
+      } catch (error) {
+        console.error("[Margin ERP] auth startup failed", error);
+        if (!cancelled) {
+          setSession(null);
+          setRole(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      try { subscription?.unsubscribe?.(); } catch {}
+    };
   }, []);
 
   return (

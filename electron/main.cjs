@@ -459,7 +459,24 @@ function createWindow() {
   });
 
   mainWindow = win;
-  win.once("ready-to-show", () => win.maximize());
+  let shown = false;
+  const showWindow = () => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
+    try { win.show(); win.maximize(); } catch {}
+  };
+  win.once("ready-to-show", showWindow);
+  win.webContents.once("did-finish-load", showWindow);
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    console.error(`[Margin ERP] renderer failed to load: ${errorCode} ${errorDescription} ${validatedURL}`);
+    // A transient file-load failure should not leave the desktop app invisible.
+    setTimeout(() => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.loadFile(path.join(__dirname, "..", "dist-electron", "index.html")).catch((error) => console.error("[Margin ERP] renderer retry failed", error));
+      }
+    }, 250);
+  });
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
   });
@@ -472,6 +489,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  process.on("exit", () => { try { destroyWhatsAppSocket(); } catch {} });
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
