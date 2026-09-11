@@ -20,7 +20,7 @@ for (const dep of ['whatsapp-web.js', 'qrcode']) {
   try { require.resolve(dep, { paths: [root] }); }
   catch {
     console.log(`Installing missing runtime dependency: ${dep}`);
-    try { execFileSync('bun', ['install', '--frozen-lockfile'], { cwd: root, stdio: 'inherit' }); }
+    try { execFileSync('bun', ['install'], { cwd: root, stdio: 'inherit' }); }
     catch { execFileSync('npm', ['install'], { cwd: root, stdio: 'inherit' }); }
     require.resolve(dep, { paths: [root] });
   }

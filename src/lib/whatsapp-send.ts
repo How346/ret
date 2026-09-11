@@ -32,6 +32,7 @@ export type SendReceiptResult = {
   success: boolean;
   mode: "background-whatsapp" | "web-text-only";
   imaged?: boolean;
+  messaged?: boolean;
   errorType?: string;
 };
 
@@ -39,9 +40,13 @@ async function renderBillImageDataUrl(html: string, widthPx: number): Promise<st
   const parser = new DOMParser();
   const doc = parser.parseFromString(html || "", "text/html");
   const host = document.createElement("div");
+  const root = document.createElement("div");
   const width = Math.max(280, Math.min(1200, Number(widthPx) || 380));
 
-  host.style.position = "fixed";
+  // Do not use a fixed/off-screen viewport for the capture. html2canvas can
+  // otherwise clip the bottom of long thermal receipts at the renderer's
+  // viewport height. The capture root gets its real content height first.
+  host.style.position = "absolute";
   host.style.left = "-100000px";
   host.style.top = "0";
   host.style.width = `${width}px`;
@@ -50,50 +55,97 @@ async function renderBillImageDataUrl(html: string, widthPx: number): Promise<st
   host.style.zIndex = "-1";
   host.style.pointerEvents = "none";
   host.style.overflow = "visible";
+  host.style.contain = "layout style paint";
 
-  for (const style of Array.from(doc.head.querySelectorAll("style"))) host.appendChild(style.cloneNode(true));
-  for (const link of Array.from(doc.head.querySelectorAll('link[rel="stylesheet"]'))) {
-    try { host.appendChild(link.cloneNode(true)); } catch { /* ignore */ }
+  root.className = "wa-bill-root";
+  root.style.width = `${width}px`;
+  root.style.maxWidth = `${width}px`;
+  root.style.minHeight = "1px";
+  root.style.height = "auto";
+  root.style.boxSizing = "border-box";
+  root.style.padding = "0";
+  root.style.margin = "0";
+  root.style.background = "#fff";
+  root.style.color = "#000";
+  root.style.overflow = "visible";
+  root.style.display = "block";
+  root.style.fontFamily = "Segoe UI, Helvetica Neue, Arial, sans-serif";
+
+  for (const style of Array.from(doc.head.querySelectorAll("style"))) {
+    const clonedStyle = document.createElement("style");
+    // The original receipt is a complete HTML document and its print rules use
+    // `body`. Inside our capture wrapper there is no nested <body>, so scope
+    // those rules to the wrapper while preserving the exact receipt CSS.
+    clonedStyle.textContent = String(style.textContent || "")
+      .replace(/(^|[,{\s])html,\s*body(?=\s*[{,])/g, "$1.wa-bill-root")
+      .replace(/(^|[,{\s])body(?=\s*[{,])/g, "$1.wa-bill-root");
+    root.appendChild(clonedStyle);
   }
-  if (doc.body) host.append(...Array.from(doc.body.childNodes).map((node) => node.cloneNode(true)));
+  for (const link of Array.from(doc.head.querySelectorAll('link[rel="stylesheet"]'))) {
+    try { root.appendChild(link.cloneNode(true)); } catch { /* ignore */ }
+  }
+  if (doc.body) {
+    root.append(...Array.from(doc.body.childNodes).map((node) => node.cloneNode(true)));
+  }
+  host.appendChild(root);
   document.body.appendChild(host);
 
-  try {
-    const images = Array.from(host.querySelectorAll("img"));
-    await Promise.all(images.map((img) => img.complete ? Promise.resolve() : new Promise<void>((resolve) => {
-      img.addEventListener("load", () => resolve(), { once: true });
-      img.addEventListener("error", () => resolve(), { once: true });
-    })));
-    try { await document.fonts.ready; } catch { /* ignore */ }
-    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  // The receipt HTML's print CSS targets <body>. Because the image is rendered
+  // from a cloned fragment, mirror the body box here so print margins become
+  // real image margins instead of being silently lost.
+  const styleOverride = document.createElement("style");
+  styleOverride.textContent = `
+    .wa-bill-root, .wa-bill-root * { box-sizing: border-box; }
+    .wa-bill-root { width: ${width}px !important; max-width: ${width}px !important; overflow: visible !important; }
+    .wa-bill-root .copy { break-after: auto !important; page-break-after: auto !important; }
+    .wa-bill-root table { width: 100% !important; max-width: 100% !important; }
+    .wa-bill-root td, .wa-bill-root th { overflow-wrap: anywhere; }
+  `;
+  root.appendChild(styleOverride);
 
-    const canvas = await html2canvas(host, {
-      backgroundColor: "#ffffff",
-      scale: 2,
-      useCORS: true,
-      allowTaint: false,
-      logging: false,
-      width,
-      windowWidth: width,
-      scrollX: 0,
-      scrollY: 0,
-    });
-    try {
-      return canvas.toDataURL("image/png");
-    } catch {
-      host.querySelectorAll("img").forEach((img) => img.remove());
-      const retry = await html2canvas(host, {
+  try {
+    const images = Array.from(root.querySelectorAll("img"));
+    await Promise.all(images.map((img) => img.complete
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          img.addEventListener("load", () => resolve(), { once: true });
+          img.addEventListener("error", () => resolve(), { once: true });
+        })));
+    try { await document.fonts.ready; } catch { /* ignore */ }
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    // Force layout before measuring. scrollHeight includes every line and the
+    // footer even when the receipt is much taller than the browser viewport.
+    const contentHeight = Math.max(
+      1,
+      Math.ceil(root.scrollHeight),
+      Math.ceil(root.getBoundingClientRect().height),
+    );
+
+    const capture = async (removeImages = false) => {
+      if (removeImages) root.querySelectorAll("img").forEach((img) => img.remove());
+      const canvas = await html2canvas(root, {
         backgroundColor: "#ffffff",
         scale: 2,
         useCORS: true,
         allowTaint: false,
         logging: false,
         width,
+        height: contentHeight,
         windowWidth: width,
+        windowHeight: Math.max(contentHeight, 900),
         scrollX: 0,
         scrollY: 0,
+        x: 0,
+        y: 0,
       });
-      return retry.toDataURL("image/png");
+      return canvas.toDataURL("image/png");
+    };
+
+    try {
+      return await capture(false);
+    } catch {
+      return await capture(true);
     }
   } finally {
     host.remove();
@@ -112,11 +164,12 @@ export async function sendReceiptOnWhatsApp(opts: {
     try {
       const imageDataUrl = await renderBillImageDataUrl(opts.html, widthPx);
       const base64 = imageDataUrl.replace(/^data:image\/png;base64,/, "");
-      const res = await window.electronAPI.sendBillImage(base64, opts.phone, "");
+      const res = await window.electronAPI.sendBillImage(base64, opts.phone, opts.message || "");
       return {
         success: !!res?.success,
         mode: "background-whatsapp",
-        imaged: !!res?.success,
+        imaged: !!res?.imaged || !!res?.success,
+        messaged: !!res?.messaged,
         errorType: res?.errorType,
       };
     } catch (err: any) {

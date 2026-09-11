@@ -38,7 +38,7 @@ type ElectronPrintAPI = {
   removeLicense: () => Promise<OfflineLicenseStatus>;
   initializeWhatsApp?: () => Promise<{ ready: boolean; qr?: string | null }>;
   getWhatsAppStatus?: () => Promise<{ ready: boolean; qr?: string | null; initializing?: boolean }>;
-  sendBillImage?: (base64Image: string, phone: string, message: string) => Promise<{ success: boolean; errorType?: string; qr?: string | null }>;
+  sendBillImage?: (base64Image: string, phone: string, message: string) => Promise<{ success: boolean; errorType?: string; qr?: string | null; imaged?: boolean; messaged?: boolean }>;
   onWhatsAppQr?: (callback: (dataUrl: string) => void) => () => void;
   onWhatsAppReady?: (callback: (payload: any) => void) => () => void;
   onWhatsAppError?: (callback: (payload: any) => void) => () => void;

@@ -4,6 +4,12 @@ const fs = require("node:fs");
 const os = require("node:os");
 const { getHWID, readStoredLicenseAsync, installLicenseAsync, removeLicense } = require("./license.cjs");
 
+// Keep hidden/background Chromium work responsive instead of allowing Chromium
+// background throttling to delay WhatsApp events and sends.
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+
 let mainWindow = null;
 
 // ---------------------------------------------------------------------------
@@ -124,6 +130,14 @@ async function initializeWhatsApp() {
       resetWhatsAppClient();
       whatsappClient = new Client({
         authStrategy: new LocalAuth({ clientId: "margin-erp", dataPath: sessionPath }),
+
+        // Keep WhatsApp Web's version cached between launches. The strict remote
+        // cache prevents an unexpected/incompatible Web build from being used.
+        webVersionCache: {
+          type: "remote",
+          strict: true,
+        },
+
         puppeteer: {
           headless: true,
           executablePath,
@@ -134,14 +148,25 @@ async function initializeWhatsApp() {
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
             "--disable-gpu",
-            "--disable-software-rasterizer",
             "--disable-extensions",
+            "--disable-software-rasterizer",
             "--disable-background-networking",
             "--disable-background-timer-throttling",
             "--disable-renderer-backgrounding",
-            "--no-first-run",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-sync",
+            "--disable-component-update",
+            "--disable-breakpad",
+            "--disable-default-apps",
             "--no-default-browser-check",
+            "--disable-popup-blocking",
+            "--mute-audio",
+            "--password-store=basic",
+            "--use-mock-keychain",
             `--user-agent=${WHATSAPP_USER_AGENT}`,
           ],
         },
@@ -215,13 +240,15 @@ ipcMain.handle("whatsapp:status", async () => ({
   error: whatsappLastError,
 }));
 
-// Send ONLY the bill image. No text/caption and no physical bill image file.
+// Send the bill image with the configured WhatsApp message as its caption.
+// The PNG exists only in memory; no bill image file is written to disk.
 ipcMain.handle("send-bill-image", async (_event, payload) => {
   try {
     const { MessageMedia } = loadWhatsAppDependencies().whatsappWebJs;
     const raw = String(payload?.base64Image || "").trim();
     const base64Image = raw.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
     const phone = cleanWhatsAppPhone(payload?.phone);
+    const message = String(payload?.message || "").trim();
 
     if (!base64Image) return { success: false, errorType: "Bill image is empty." };
     if (!phone) return { success: false, errorType: "WhatsApp number is empty or invalid." };
@@ -256,8 +283,15 @@ ipcMain.handle("send-bill-image", async (_event, payload) => {
     }
 
     const media = new MessageMedia("image/png", base64Image, "bill.png");
-    await whatsappClient.sendMessage(numberId._serialized, media, { sendMediaAsDocument: false });
-    return { success: true, phone };
+
+    // One WhatsApp operation: image + message as caption. This is faster and
+    // avoids the race/extra round-trip caused by sending two separate messages.
+    const sendOptions = {
+      sendMediaAsDocument: false,
+      ...(message ? { caption: message } : {}),
+    };
+    await whatsappClient.sendMessage(numberId._serialized, media, sendOptions);
+    return { success: true, phone, imaged: true, messaged: !!message };
   } catch (error) {
     const message = whatsappErrorMessage(error);
     whatsappLastError = message;

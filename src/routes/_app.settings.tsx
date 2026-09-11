@@ -368,7 +368,7 @@ function Settings() {
               Placeholders: <code>{"{customer}"}</code>, <code>{"{shop}"}</code>, <code>{"{invoice}"}</code>, <code>{"{total}"}</code>.
               Numbers with 10 digits automatically get the country code above added in front.
             </p>
-            <p className="text-xs text-muted-foreground border-t border-border pt-3">The connection above is the only WhatsApp login needed. Once connected, the POS sends only the bill image directly to WhatsApp in the background.</p>
+            <p className="text-xs text-muted-foreground border-t border-border pt-3">The connection above is the only WhatsApp login needed. Once connected, the POS sends the complete bill image with this message as its WhatsApp caption, directly in the background.</p>
 
           </Card>
         </TabsContent>

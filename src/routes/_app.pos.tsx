@@ -1321,7 +1321,7 @@ function WhatsAppSendDialog({
         paperSize,
       });
       if (res.success) {
-        toast.success("Bill image sent to WhatsApp");
+        toast.success("Bill image + message sent to WhatsApp");
         onClose();
       } else {
         toast.error(res.errorType || "WhatsApp could not send the bill image");
@@ -1360,14 +1360,20 @@ function WhatsAppSendDialog({
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            The bill is rendered directly in memory and sent as a PNG image. No bill image file is created and no browser window is opened.
+            The complete bill is rendered in memory and sent as a PNG image with your configured message as the WhatsApp caption. No bill image file is created and no browser window is opened.
           </p>
+          {ask.message && (
+            <div className="rounded-lg border bg-muted/40 p-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Message</div>
+              <div className="text-sm whitespace-pre-wrap break-words">{ask.message}</div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" disabled={sending} onClick={onClose}>Cancel</Button>
           <Button disabled={!phone.trim() || sending} onClick={() => void send()}>
             {sending && <Loader2 className="h-4 w-4 animate-spin" />}
-            {sending ? "Sending image…" : "Send Bill Image"}
+            {sending ? "Sending bill…" : "Send Bill + Message"}
           </Button>
         </DialogFooter>
       </DialogContent>

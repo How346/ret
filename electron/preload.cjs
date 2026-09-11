@@ -44,7 +44,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   sendReceiptWhatsAppImage: (imageDataUrl, phone, message, html, widthPx) =>
     ipcRenderer.invoke("whatsapp:send-image", { imageDataUrl, phone, message, html, widthPx }),
   // Background whatsapp-web.js integration. The QR is returned as a data URL
-  // and never opens a browser window.
+  // and never opens a browser window. Bill images are sent with the configured
+  // message as the WhatsApp image caption.
   initializeWhatsApp: () => ipcRenderer.invoke("whatsapp:initialize"),
   getWhatsAppStatus: () => ipcRenderer.invoke("whatsapp:status"),
   sendBillImage: (base64Image, phone, message) =>
