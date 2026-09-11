@@ -53,16 +53,13 @@ const paths = await packager({
   // Obfuscate the shipped source right after Packager stages a copy of the
   // app, so `bun run dev` / a plain `vite build` are completely unaffected
   // and only what actually goes out the door is protected.
+  // Note: modern @electron/packager hooks are promise-based (no callback
+  // argument) — throwing/rejecting here fails the whole packaging step.
   afterCopy: [
-    async (buildPath, _electronVersion, _platform, _arch, callback) => {
-      try {
-        console.log('Obfuscating shipped source before finalizing the package…');
-        await obfuscateElectronMainProcess(buildPath);
-        await obfuscateRendererBundle(buildPath);
-        callback();
-      } catch (err) {
-        callback(err);
-      }
+    async (buildPath) => {
+      console.log('Obfuscating shipped source before finalizing the package…');
+      await obfuscateElectronMainProcess(buildPath);
+      await obfuscateRendererBundle(buildPath);
     },
   ],
 });
