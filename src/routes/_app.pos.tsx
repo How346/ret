@@ -821,7 +821,7 @@ function POS() {
             }
             // action === "save": bill is already saved above, nothing further to do.
           } catch (err: any) {
-            toast.error(err.message ?? "Failed to save sale");
+            toast.error(String(err?.message || err || "Failed to save sale"));
           }
         }}
       />

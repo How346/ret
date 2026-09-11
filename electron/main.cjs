@@ -272,25 +272,29 @@ ipcMain.handle("send-bill-image", async (_event, payload) => {
       return { success: false, errorType: "The generated bill image is invalid." };
     }
 
-    let numberId;
+    // Resolve the chat once. If WhatsApp cannot resolve the number from its
+    // cache, use the canonical @c.us chat id as a fallback; WhatsApp Web can
+    // resolve it itself and this avoids a needless extra failure on fresh chats.
+    let chatId = `${phone}@c.us`;
     try {
-      numberId = await whatsappClient.getNumberId(phone);
+      const numberId = await whatsappClient.getNumberId(phone);
+      if (numberId?._serialized) chatId = numberId._serialized;
     } catch (error) {
-      return { success: false, errorType: `Could not check the WhatsApp number: ${whatsappErrorMessage(error)}` };
-    }
-    if (!numberId?._serialized) {
-      return { success: false, errorType: "This number is not available on WhatsApp." };
+      // Do not fail here: sendMessage() can still resolve a valid @c.us id.
+      // Keep the actual send as the source of truth.
     }
 
     const media = new MessageMedia("image/png", base64Image, "bill.png");
 
     // One WhatsApp operation: image + message as caption. This is faster and
-    // avoids the race/extra round-trip caused by sending two separate messages.
+    // guarantees the configured message travels with the bill image instead
+    // of racing a second text-message request.
     const sendOptions = {
       sendMediaAsDocument: false,
       ...(message ? { caption: message } : {}),
     };
-    await whatsappClient.sendMessage(numberId._serialized, media, sendOptions);
+
+    await whatsappClient.sendMessage(chatId, media, sendOptions);
     return { success: true, phone, imaged: true, messaged: !!message };
   } catch (error) {
     const message = whatsappErrorMessage(error);

@@ -37,94 +37,81 @@ export type SendReceiptResult = {
 };
 
 async function renderBillImageDataUrl(html: string, widthPx: number): Promise<string> {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html || "", "text/html");
-  const host = document.createElement("div");
-  const root = document.createElement("div");
   const width = Math.max(280, Math.min(1200, Number(widthPx) || 380));
+  const iframe = document.createElement("iframe");
 
-  // Do not use a fixed/off-screen viewport for the capture. html2canvas can
-  // otherwise clip the bottom of long thermal receipts at the renderer's
-  // viewport height. The capture root gets its real content height first.
-  host.style.position = "absolute";
-  host.style.left = "-100000px";
-  host.style.top = "0";
-  host.style.width = `${width}px`;
-  host.style.maxWidth = `${width}px`;
-  host.style.background = "#fff";
-  host.style.zIndex = "-1";
-  host.style.pointerEvents = "none";
-  host.style.overflow = "visible";
-  host.style.contain = "layout style paint";
-
-  root.className = "wa-bill-root";
-  root.style.width = `${width}px`;
-  root.style.maxWidth = `${width}px`;
-  root.style.minHeight = "1px";
-  root.style.height = "auto";
-  root.style.boxSizing = "border-box";
-  root.style.padding = "0";
-  root.style.margin = "0";
-  root.style.background = "#fff";
-  root.style.color = "#000";
-  root.style.overflow = "visible";
-  root.style.display = "block";
-  root.style.fontFamily = "Segoe UI, Helvetica Neue, Arial, sans-serif";
-
-  for (const style of Array.from(doc.head.querySelectorAll("style"))) {
-    const clonedStyle = document.createElement("style");
-    // The original receipt is a complete HTML document and its print rules use
-    // `body`. Inside our capture wrapper there is no nested <body>, so scope
-    // those rules to the wrapper while preserving the exact receipt CSS.
-    clonedStyle.textContent = String(style.textContent || "")
-      .replace(/(^|[,{\s])html,\s*body(?=\s*[{,])/g, "$1.wa-bill-root")
-      .replace(/(^|[,{\s])body(?=\s*[{,])/g, "$1.wa-bill-root");
-    root.appendChild(clonedStyle);
-  }
-  for (const link of Array.from(doc.head.querySelectorAll('link[rel="stylesheet"]'))) {
-    try { root.appendChild(link.cloneNode(true)); } catch { /* ignore */ }
-  }
-  if (doc.body) {
-    root.append(...Array.from(doc.body.childNodes).map((node) => node.cloneNode(true)));
-  }
-  host.appendChild(root);
-  document.body.appendChild(host);
-
-  // The receipt HTML's print CSS targets <body>. Because the image is rendered
-  // from a cloned fragment, mirror the body box here so print margins become
-  // real image margins instead of being silently lost.
-  const styleOverride = document.createElement("style");
-  styleOverride.textContent = `
-    .wa-bill-root, .wa-bill-root * { box-sizing: border-box; }
-    .wa-bill-root { width: ${width}px !important; max-width: ${width}px !important; overflow: visible !important; }
-    .wa-bill-root .copy { break-after: auto !important; page-break-after: auto !important; }
-    .wa-bill-root table { width: 100% !important; max-width: 100% !important; }
-    .wa-bill-root td, .wa-bill-root th { overflow-wrap: anywhere; }
-  `;
-  root.appendChild(styleOverride);
+  // Use a same-origin iframe so the original receipt's <html>/<body> CSS is
+  // preserved exactly. This avoids the common html2canvas problem where a
+  // cloned receipt loses body padding or gets clipped at the renderer height.
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-100000px";
+  iframe.style.top = "0";
+  iframe.style.width = `${width}px`;
+  iframe.style.height = "100px";
+  iframe.style.border = "0";
+  iframe.style.visibility = "visible";
+  iframe.style.pointerEvents = "none";
+  document.body.appendChild(iframe);
 
   try {
-    const images = Array.from(root.querySelectorAll("img"));
-    await Promise.all(images.map((img) => img.complete
-      ? Promise.resolve()
-      : new Promise<void>((resolve) => {
-          img.addEventListener("load", () => resolve(), { once: true });
-          img.addEventListener("error", () => resolve(), { once: true });
-        })));
-    try { await document.fonts.ready; } catch { /* ignore */ }
+    const frameDoc = iframe.contentDocument;
+    if (!frameDoc) throw new Error("Could not create the bill image document.");
+
+    frameDoc.open();
+    frameDoc.write(html || "<!doctype html><html><body></body></html>");
+    frameDoc.close();
+
+    await new Promise<void>((resolve) => {
+      if (frameDoc.readyState === "complete") resolve();
+      else iframe.addEventListener("load", () => resolve(), { once: true });
+    });
+
+    const body = frameDoc.body;
+    const docEl = frameDoc.documentElement;
+    if (!body) throw new Error("Bill HTML has no body to capture.");
+
+    // Force the exact thermal/A4 width and preserve the configured margins.
+    body.style.width = `${width}px`;
+    body.style.maxWidth = `${width}px`;
+    body.style.minHeight = "0";
+    body.style.height = "auto";
+    body.style.overflow = "visible";
+    body.style.boxSizing = "border-box";
+    body.style.background = "#fff";
+    body.style.color = "#000";
+    body.style.margin = body.style.margin || "0";
+    body.style.paddingBottom = `calc(${body.style.paddingBottom || "0px"} + 16px)`;
+
+    // Ensure all images and fonts have settled before measuring the complete
+    // receipt. The extra bottom safety margin prevents the last dashed line,
+    // footer or text descender from touching the PNG boundary.
+    const images = Array.from(body.querySelectorAll("img"));
+    await Promise.all(images.map((img) => {
+      if (img.complete) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        img.addEventListener("load", () => resolve(), { once: true });
+        img.addEventListener("error", () => resolve(), { once: true });
+      });
+    }));
+    try { await frameDoc.fonts?.ready; } catch { /* font loading is optional */ }
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
-    // Force layout before measuring. scrollHeight includes every line and the
-    // footer even when the receipt is much taller than the browser viewport.
+    // scrollHeight is more reliable than getBoundingClientRect for long
+    // receipts because it includes content extending beyond the viewport.
     const contentHeight = Math.max(
       1,
-      Math.ceil(root.scrollHeight),
-      Math.ceil(root.getBoundingClientRect().height),
+      Math.ceil(body.scrollHeight),
+      Math.ceil(body.offsetHeight),
+      Math.ceil(docEl?.scrollHeight || 0),
     );
 
-    const capture = async (removeImages = false) => {
-      if (removeImages) root.querySelectorAll("img").forEach((img) => img.remove());
-      const canvas = await html2canvas(root, {
+    iframe.style.height = `${contentHeight}px`;
+
+    const capture = async (removeImages = false): Promise<string> => {
+      if (removeImages) body.querySelectorAll("img").forEach((img) => img.remove());
+
+      const canvas = await html2canvas(body, {
         backgroundColor: "#ffffff",
         scale: 2,
         useCORS: true,
@@ -133,22 +120,42 @@ async function renderBillImageDataUrl(html: string, widthPx: number): Promise<st
         width,
         height: contentHeight,
         windowWidth: width,
-        windowHeight: Math.max(contentHeight, 900),
+        windowHeight: Math.max(contentHeight, 1000),
         scrollX: 0,
         scrollY: 0,
         x: 0,
         y: 0,
       });
-      return canvas.toDataURL("image/png");
+
+      // Give the generated PNG a guaranteed white bottom safety area. This is
+      // deliberately small so it looks like a natural receipt margin.
+      const padded = document.createElement("canvas");
+      padded.width = canvas.width;
+      padded.height = canvas.height + 24;
+      const ctx = padded.getContext("2d");
+      if (!ctx) return canvas.toDataURL("image/png");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, padded.width, padded.height);
+      ctx.drawImage(canvas, 0, 0);
+      return padded.toDataURL("image/png");
     };
 
     try {
       return await capture(false);
-    } catch {
-      return await capture(true);
+    } catch (firstError) {
+      // A remote shop logo can taint/fail the canvas. Retry without images so
+      // the customer still receives the complete bill rather than a cut-off
+      // or missing image.
+      try {
+        return await capture(true);
+      } catch (secondError) {
+        const first = String((firstError as any)?.message || firstError || "");
+        const second = String((secondError as any)?.message || secondError || "");
+        throw new Error(second || first || "Could not render the complete bill image.");
+      }
     }
   } finally {
-    host.remove();
+    iframe.remove();
   }
 }
 
