@@ -38,11 +38,11 @@ export function WhatsAppQrPanel() {
         <div className="flex flex-col items-center gap-2">
           <div className="text-xs text-muted-foreground text-center">Open WhatsApp on your phone → Linked devices → Link a device, then scan this QR.</div>
           <img src={qr} alt="WhatsApp QR code" className="w-64 h-64 rounded-lg border bg-white p-2" />
-          <div className="text-[11px] text-muted-foreground">The WhatsApp browser runs completely in the background.</div>
+          <div className="text-[11px] text-muted-foreground">No Chromium or browser window is used; Baileys keeps the WhatsApp connection in the background.</div>
         </div>
       ) : (
         <div className="flex items-center justify-between gap-3">
-          <div className="text-xs text-muted-foreground">Connect once. LocalAuth keeps the session for future launches.</div>
+          <div className="text-xs text-muted-foreground">Connect once. Baileys saves the encrypted session keys locally for future launches.</div>
           <Button size="sm" variant="outline" onClick={start} disabled={starting}>{starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4 mr-1" />} {starting ? "Starting…" : "Connect WhatsApp"}</Button>
         </div>
       )}

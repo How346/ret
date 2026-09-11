@@ -194,18 +194,3 @@ export async function sendReceiptOnWhatsApp(opts: {
     errorType: "Background WhatsApp sending is available only in the Windows desktop app.",
   };
 }
-
-// Opens WhatsApp Web in the user's own default browser on this PC, so they
-// can log in (scan the QR code) there once — same as opening
-// web.whatsapp.com in any ordinary browser tab.
-export async function openWhatsAppWeb(): Promise<{ success: boolean; errorType?: string }> {
-  if (isDesktopPrintingAvailable() && window.electronAPI?.openWhatsAppWeb) {
-    try {
-      return await window.electronAPI.openWhatsAppWeb();
-    } catch (err: any) {
-      return { success: false, errorType: String(err?.message || err) };
-    }
-  }
-  window.open("https://web.whatsapp.com", "_blank");
-  return { success: true };
-}
