@@ -1323,10 +1323,6 @@ function WhatsAppSendDialog({
       if (res.success) {
         toast.success("Bill image sent to WhatsApp");
         onClose();
-      } else if (res.pdfOpened) {
-        toast.warning(
-          (res.errorType || "Couldn't send via WhatsApp") + " — opened the bill as a PDF instead, you can attach that manually.",
-        );
       } else {
         toast.error(res.errorType || "WhatsApp could not send the bill image");
       }

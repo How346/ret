@@ -31,24 +31,5 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "dist-electron"),
     emptyOutDir: true,
     target: "chrome120",
-    // Splits the big third-party libraries into their own chunks instead of
-    // one giant bundle — this is purely a load-time/organization
-    // improvement (the "chunk larger than 500kB" warning), it doesn't
-    // change what code runs.
-    chunkSizeWarningLimit: 900,
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (!id.includes("node_modules")) return undefined;
-          if (/[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "vendor-react";
-          if (/[\\/]@tanstack[\\/]/.test(id)) return "vendor-tanstack";
-          if (/[\\/](recharts|d3-[a-z-]+)[\\/]/.test(id)) return "vendor-charts";
-          if (/[\\/](jsbarcode|html2canvas|qrcode)[\\/]/.test(id)) return "vendor-media";
-          if (/[\\/]@radix-ui[\\/]/.test(id)) return "vendor-radix";
-          if (/[\\/]lucide-react[\\/]/.test(id)) return "vendor-icons";
-          return "vendor";
-        },
-      },
-    },
   },
 });
