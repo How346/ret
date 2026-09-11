@@ -6,6 +6,18 @@ const { getHWID, readStoredLicenseAsync, installLicenseAsync, removeLicense } = 
 
 let mainWindow = null;
 
+// Puppeteer/whatsapp-web.js occasionally rejects promises tied to page
+// lifecycle events (e.g. a background frame navigating away) outside the
+// normal call chain we can wrap in try/catch. Without this, Electron shows a
+// raw, cryptic native error dialog and can bring down the whole app over a
+// WhatsApp hiccup that has nothing to do with billing. Log and continue.
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[uncaughtException]", error);
+});
+
 // ---------------------------------------------------------------------------
 // Background WhatsApp bill-image sender (whatsapp-web.js)
 // ---------------------------------------------------------------------------
@@ -15,16 +27,61 @@ const WHATSAPP_USER_AGENT =
 
 let whatsappWebJs = null;
 let QRCode = null;
+let puppeteer = null;
 let whatsappClient = null;
 let whatsappReady = false;
 let whatsappQrDataUrl = null;
 let whatsappInitializing = false;
 let whatsappInitPromise = null;
+let whatsappLastError = null;
 
 function loadWhatsAppDependencies() {
-  if (!whatsappWebJs) whatsappWebJs = require("whatsapp-web.js");
-  if (!QRCode) QRCode = require("qrcode");
-  return { whatsappWebJs, QRCode };
+  try {
+    if (!whatsappWebJs) whatsappWebJs = require("whatsapp-web.js");
+    if (!QRCode) QRCode = require("qrcode");
+    if (!puppeteer) puppeteer = require("puppeteer");
+    return { whatsappWebJs, QRCode, puppeteer };
+  } catch (error) {
+    const e = new Error(
+      `WhatsApp dependency error: ${error?.message || error}. Run "bun install" before building the Windows app.`
+    );
+    e.cause = error;
+    throw e;
+  }
+}
+
+function findChromeExecutable() {
+  const candidates = [];
+  if (process.platform === "win32") {
+    const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+    const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+    const localAppData = process.env.LOCALAPPDATA || "";
+    candidates.push(
+      path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+      path.join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+      path.join(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
+    );
+  }
+  for (const candidate of candidates) {
+    try { if (candidate && fs.existsSync(candidate)) return candidate; } catch { /* ignore */ }
+  }
+  return null;
+}
+
+function resolveWhatsAppBrowser() {
+  const { puppeteer: p } = loadWhatsAppDependencies();
+  try {
+    const bundled = typeof p.executablePath === "function" ? p.executablePath() : null;
+    if (bundled && fs.existsSync(bundled)) return bundled;
+  } catch { /* Puppeteer cache may not be present in the packaged app. */ }
+  const system = findChromeExecutable();
+  if (system) return system;
+  throw new Error(
+    "No Chromium/Chrome browser was found for WhatsApp. Install Google Chrome or Microsoft Edge, then restart the billing software."
+  );
 }
 
 function sendWhatsAppEvent(channel, payload) {
@@ -42,7 +99,37 @@ function cleanWhatsAppPhone(phone) {
 }
 
 function whatsappErrorMessage(error) {
-  return String(error?.message || error || "Unknown WhatsApp error");
+  if (!error) return "Unknown WhatsApp error";
+  const message = String(error?.message || error);
+  const stack = String(error?.stack || "");
+  if (/cannot find module.*whatsapp-web\.js/i.test(message)) {
+    return "WhatsApp module is missing. Run bun install and rebuild the Windows app.";
+  }
+  if (/could not find chrome|failed to launch the browser|executable doesn't exist/i.test(message)) {
+    return "WhatsApp browser could not start. Install/update Google Chrome or Microsoft Edge and restart the app.";
+  }
+  if (/execution context was destroyed|protocol error|target closed|session closed/i.test(message)) {
+    return "WhatsApp's connection dropped mid-request. Please try sending again.";
+  }
+  if (/detached frame|navigating frame was detached/i.test(message)) {
+    return "WhatsApp Web reloaded unexpectedly. Please try sending again in a moment.";
+  }
+  if (/timeout|timed out/i.test(message)) {
+    return "WhatsApp took too long to respond. Check your internet connection and try again.";
+  }
+  if (/evaluation failed/i.test(message)) {
+    return "WhatsApp Web didn't respond as expected (it may have updated). Please try again, or reconnect in Settings → WhatsApp.";
+  }
+  return stack && stack !== message ? message : message;
+}
+
+function resetWhatsAppClient() {
+  whatsappReady = false;
+  whatsappQrDataUrl = null;
+  const client = whatsappClient;
+  whatsappClient = null;
+  try { client?.removeAllListeners?.(); } catch { /* ignore */ }
+  try { client?.destroy?.(); } catch { /* ignore */ }
 }
 
 async function initializeWhatsApp() {
@@ -50,25 +137,35 @@ async function initializeWhatsApp() {
   if (whatsappInitPromise) return whatsappInitPromise;
 
   whatsappInitPromise = (async () => {
+    whatsappInitializing = true;
+    whatsappLastError = null;
     try {
-      const { Client, LocalAuth } = loadWhatsAppDependencies();
-      whatsappInitializing = true;
-      whatsappQrDataUrl = null;
-
+      const { whatsappWebJs: wjs, QRCode: qrCode } = loadWhatsAppDependencies();
+      const { Client, LocalAuth } = wjs;
+      const executablePath = resolveWhatsAppBrowser();
       const sessionPath = path.join(app.getPath("userData"), "whatsapp-session");
 
+      resetWhatsAppClient();
       whatsappClient = new Client({
-        authStrategy: new LocalAuth({
-          clientId: "margin-erp",
-          dataPath: sessionPath,
-        }),
+        authStrategy: new LocalAuth({ clientId: "margin-erp", dataPath: sessionPath }),
         puppeteer: {
           headless: true,
+          executablePath,
+          timeout: 60000,
+          protocolTimeout: 120000,
+          dumpio: false,
           args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
             "--disable-gpu",
+            "--disable-software-rasterizer",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--no-first-run",
+            "--no-default-browser-check",
             `--user-agent=${WHATSAPP_USER_AGENT}`,
           ],
         },
@@ -77,14 +174,13 @@ async function initializeWhatsApp() {
       whatsappClient.on("qr", async (qr) => {
         whatsappReady = false;
         try {
-          whatsappQrDataUrl = await QRCode.toDataURL(qr, {
-            margin: 1,
-            width: 320,
-            errorCorrectionLevel: "M",
+          whatsappQrDataUrl = await qrCode.toDataURL(qr, {
+            margin: 1, width: 320, errorCorrectionLevel: "M",
           });
           sendWhatsAppEvent("whatsapp-qr", whatsappQrDataUrl);
         } catch (error) {
-          sendWhatsAppEvent("whatsapp-error", { error: whatsappErrorMessage(error) });
+          whatsappLastError = whatsappErrorMessage(error);
+          sendWhatsAppEvent("whatsapp-error", { error: whatsappLastError });
         }
       });
 
@@ -94,6 +190,7 @@ async function initializeWhatsApp() {
 
       whatsappClient.on("ready", () => {
         whatsappReady = true;
+        whatsappLastError = null;
         whatsappQrDataUrl = null;
         sendWhatsAppEvent("whatsapp-ready", { ready: true });
       });
@@ -101,17 +198,16 @@ async function initializeWhatsApp() {
       whatsappClient.on("auth_failure", (message) => {
         whatsappReady = false;
         whatsappQrDataUrl = null;
-        sendWhatsAppEvent("whatsapp-error", {
-          error: `WhatsApp authentication failed: ${String(message || "Unknown authentication failure")}`,
-        });
+        whatsappLastError = `WhatsApp authentication failed: ${String(message || "Unknown authentication failure")}`;
+        sendWhatsAppEvent("whatsapp-error", { error: whatsappLastError });
       });
 
       whatsappClient.on("disconnected", (reason) => {
         whatsappReady = false;
         whatsappQrDataUrl = null;
+        whatsappLastError = `WhatsApp disconnected: ${String(reason || "Disconnected")}`;
         sendWhatsAppEvent("whatsapp-disconnected", { reason: String(reason || "Disconnected") });
-        try { whatsappClient?.destroy(); } catch { /* ignore */ }
-        whatsappClient = null;
+        resetWhatsAppClient();
       });
 
       whatsappClient.on("change_state", (state) => {
@@ -119,15 +215,12 @@ async function initializeWhatsApp() {
       });
 
       await whatsappClient.initialize();
-      return { ready: whatsappReady, qr: whatsappQrDataUrl };
+      return { ready: whatsappReady, qr: whatsappQrDataUrl, error: whatsappLastError || undefined };
     } catch (error) {
-      whatsappReady = false;
-      whatsappQrDataUrl = null;
-      try { await whatsappClient?.destroy(); } catch { /* ignore */ }
-      whatsappClient = null;
-      const message = whatsappErrorMessage(error);
-      sendWhatsAppEvent("whatsapp-error", { error: message });
-      return { ready: false, qr: null, error: message };
+      whatsappLastError = whatsappErrorMessage(error);
+      resetWhatsAppClient();
+      sendWhatsAppEvent("whatsapp-error", { error: whatsappLastError });
+      return { ready: false, qr: null, error: whatsappLastError };
     } finally {
       whatsappInitializing = false;
       whatsappInitPromise = null;
@@ -143,12 +236,15 @@ ipcMain.handle("whatsapp:status", async () => ({
   ready: whatsappReady,
   qr: whatsappQrDataUrl,
   initializing: whatsappInitializing,
+  error: whatsappLastError,
 }));
 
-// Send ONLY the bill image. The image never has to be written to disk.
+// Send ONLY the bill image. No text/caption and no physical bill image file.
 ipcMain.handle("send-bill-image", async (_event, payload) => {
+  const html = String(payload?.html || "");
+  const widthPx = Math.max(280, Math.min(1200, Number(payload?.widthPx) || 380));
   try {
-    const { MessageMedia } = loadWhatsAppDependencies();
+    const { MessageMedia } = loadWhatsAppDependencies().whatsappWebJs;
     const raw = String(payload?.base64Image || "").trim();
     const base64Image = raw.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
     const phone = cleanWhatsAppPhone(payload?.phone);
@@ -162,34 +258,51 @@ ipcMain.handle("send-bill-image", async (_event, payload) => {
     if (!whatsappClient || !whatsappReady) {
       const status = await initializeWhatsApp();
       if (!status.ready || !whatsappClient || !whatsappReady) {
+        const pdfOpened = html ? !!(await createBillPdf(html, widthPx)) : false;
         return {
           success: false,
-          errorType: status.error || "WhatsApp is not connected. Scan the QR code in Settings → WhatsApp first.",
+          errorType: status.error || whatsappLastError || "WhatsApp is not connected. Scan the QR code in Settings → WhatsApp first.",
           qr: whatsappQrDataUrl,
+          pdfOpened,
         };
       }
     }
 
-    const chatId = `${phone}@c.us`;
-    const media = new MessageMedia("image/png", base64Image, "bill.png");
-
-    // Verify the destination before sending. This avoids reporting success for
-    // a number that is not a WhatsApp account.
-    let numberId = null;
-    try {
-      numberId = await whatsappClient.getNumberId(phone);
-    } catch {
-      numberId = null;
+    // Validate the base64 payload before handing it to whatsapp-web.js.
+    try { Buffer.from(base64Image, "base64"); } catch {
+      return { success: false, errorType: "The generated bill image is invalid." };
     }
-    if (!numberId) {
+
+    // getNumberId can transiently fail right after the client becomes
+    // "ready" with errors like "Execution context was destroyed" while
+    // WhatsApp Web's own page is still settling — one retry after a short
+    // pause resolves the vast majority of these without bothering the user.
+    let numberId;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        numberId = await whatsappClient.getNumberId(phone);
+        break;
+      } catch (error) {
+        if (attempt === 1) {
+          const pdfOpened = html ? !!(await createBillPdf(html, widthPx)) : false;
+          return { success: false, errorType: `Could not check the WhatsApp number: ${whatsappErrorMessage(error)}`, pdfOpened };
+        }
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+    }
+    if (!numberId?._serialized) {
       return { success: false, errorType: "This number is not available on WhatsApp." };
     }
 
-    // Deliberately send no caption/text: the requested output is only the bill image.
-    await whatsappClient.sendMessage(chatId, media);
+    const media = new MessageMedia("image/png", base64Image, "bill.png");
+    await whatsappClient.sendMessage(numberId._serialized, media, { sendMediaAsDocument: false });
     return { success: true, phone };
   } catch (error) {
-    return { success: false, errorType: whatsappErrorMessage(error) };
+    const message = whatsappErrorMessage(error);
+    whatsappLastError = message;
+    sendWhatsAppEvent("whatsapp-error", { error: message });
+    const pdfOpened = html ? !!(await createBillPdf(html, widthPx)) : false;
+    return { success: false, errorType: message, pdfOpened };
   }
 });
 
@@ -323,110 +436,14 @@ ipcMain.handle("print:html", async (_event, payload) => {
 });
 
 // ---------------------------------------------------------------------------
-// WhatsApp bill sharing (via the computer's own browser)
+// PDF fallback for WhatsApp bill sending
 //
-// WhatsApp has no public desktop API to auto-attach an image, so the
-// practical, reliable approach is:
-//   1. Render the bill HTML off-screen and capture it as an image, then put
-//      that image on the OS clipboard.
-//   2. Open WhatsApp Web using WhatsApp's own "click to chat" link
-//      (web.whatsapp.com/send) in the user's own default browser — whichever
-//      browser (Chrome, Edge, Firefox, ...) they've set as default on this
-//      PC — with the message pre-filled. Their existing WhatsApp Web login
-//      in that browser (if any) is used as-is; if not logged in yet, they
-//      scan the QR code there once, same as always.
-// The cashier then just presses Ctrl+V in the chat box and hits send — this
-// keeps a human confirming every send instead of a script silently sending
-// messages on the shop's behalf.
+// If the whatsapp-web.js/Puppeteer session can't send the image directly
+// (not logged in, browser missing, WhatsApp Web changed something under us,
+// etc.), we generate a real PDF of the bill and open it so the cashier can
+// still attach it manually from WhatsApp's own document picker instead of
+// being left with nothing.
 // ---------------------------------------------------------------------------
-
-async function captureHtmlToClipboardImage(html, widthPx) {
-  let tmpFile = null;
-  let pngFile = null;
-  let shotWin = null;
-  try {
-    tmpFile = path.join(os.tmpdir(), `margin-erp-wa-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
-    pngFile = path.join(os.tmpdir(), `margin-erp-wa-${Date.now()}-${Math.random().toString(36).slice(2)}.png`);
-    fs.writeFileSync(tmpFile, html, "utf8");
-
-    // Use a real Chromium page instead of Electron's offscreen renderer. This
-    // is considerably more reliable on Windows machines/drivers when the
-    // resulting bitmap must be placed on the native Windows clipboard.
-    shotWin = new BrowserWindow({
-      show: false,
-      width: Math.max(280, Number(widthPx) || 380),
-      height: 900,
-      x: -10000,
-      y: -10000,
-      skipTaskbar: true,
-      focusable: false,
-      backgroundColor: "#ffffff",
-      webPreferences: { contextIsolation: true, sandbox: true },
-    });
-
-    await shotWin.loadFile(tmpFile);
-    await shotWin.webContents.executeJavaScript(`
-      (async () => {
-        try { if (document.fonts?.ready) await document.fonts.ready; } catch (_) {}
-        const imgs = Array.from(document.images || []);
-        await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => {
-          img.addEventListener('load', r, { once: true });
-          img.addEventListener('error', r, { once: true });
-        })));
-        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-        return true;
-      })()
-    `, true);
-
-    const size = await shotWin.webContents.executeJavaScript(`({
-      width: Math.ceil(Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0)),
-      height: Math.ceil(Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0))
-    })`);
-    const width = Math.max(280, Math.min(1200, Number(widthPx) || Number(size?.width) || 380));
-    const height = Math.max(80, Math.min(6000, Number(size?.height) || 600));
-    shotWin.setSize(width, height);
-
-    await shotWin.webContents.executeJavaScript(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`);
-
-    // A short showInactive() makes Chromium paint a hidden/off-screen window
-    // consistently without putting it in front of the cashier.
-    try { shotWin.showInactive(); } catch { /* ignore */ }
-    await new Promise(r => setTimeout(r, 80));
-
-    const image = await shotWin.webContents.capturePage({ x: 0, y: 0, width, height });
-    if (!image || image.isEmpty()) return false;
-
-    const png = image.toPNG();
-    fs.writeFileSync(pngFile, png);
-
-    // Primary native Electron clipboard path.
-    try {
-      clipboard.writeImage(image);
-      if (!clipboard.readImage().isEmpty()) return true;
-    } catch { /* fall through to Windows clipboard fallback */ }
-
-    // Windows fallback: System.Windows.Forms writes the actual bitmap to the
-    // Windows clipboard. This helps on PCs where Chromium/Electron's clipboard
-    // bridge is blocked by another clipboard manager or driver.
-    if (process.platform === "win32") {
-      try {
-        const { spawnSync } = require("node:child_process");
-        const psPath = pngFile.replace(/'/g, "''");
-        const command = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img=[System.Drawing.Image]::FromFile('${psPath}'); try { [System.Windows.Forms.Clipboard]::SetImage($img) } finally { $img.Dispose() }`;
-        const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", command], { windowsHide: true, timeout: 10000 });
-        if (result.status === 0) return true;
-      } catch { /* fall through */ }
-    }
-
-    return false;
-  } catch {
-    return false;
-  } finally {
-    try { if (shotWin && !shotWin.isDestroyed()) shotWin.destroy(); } catch { /* ignore */ }
-    try { if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-    try { if (pngFile && fs.existsSync(pngFile)) fs.unlinkSync(pngFile); } catch { /* ignore */ }
-  }
-}
 
 async function createBillPdf(html, widthPx) {
   let tmpFile = null;
@@ -458,115 +475,3 @@ async function createBillPdf(html, widthPx) {
     try { if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
   }
 }
-
-// Opens WhatsApp Web in the user's own default browser so they can log in
-// (scan the QR code) there — exactly like opening web.whatsapp.com in a
-// normal browser tab. Whichever browser is set as default on this PC is
-// used; Electron does not embed or control it.
-ipcMain.handle("whatsapp:open-web", async () => {
-  try {
-    await shell.openExternal("https://web.whatsapp.com/");
-    return { success: true };
-  } catch (err) {
-    return { success: false, errorType: String((err && err.message) || err) };
-  }
-});
-
-// Captures the bill as an image (copied to clipboard), then opens the
-// customer's WhatsApp Web chat in the user's default browser with the
-// message pre-filled, ready for the cashier to paste the image and send.
-ipcMain.handle("whatsapp:send-image", async (_event, payload) => {
-  const imageDataUrl = String((payload && payload.imageDataUrl) || "");
-  let phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");
-  if (phone.length === 10) phone = `91${phone}`;
-  else if (phone.length === 11 && phone.startsWith("0")) phone = `91${phone.slice(1)}`;
-  else if (phone.startsWith("00")) phone = phone.slice(2);
-  const message = String((payload && payload.message) || "");
-  const html = String((payload && payload.html) || "");
-  const widthPx = Math.max(280, Math.min(1200, Number(payload && payload.widthPx) || 380));
-
-  if (!phone) return { success: false, errorType: "missing-phone" };
-
-  // An empty/invalid image isn't fatal — it just means the clipboard step is
-  // skipped and we fall through to the PDF fallback below, so the cashier
-  // still gets something usable instead of nothing at all.
-  let imaged = false;
-  let tmpPngFile = null;
-  if (imageDataUrl.startsWith("data:image/")) {
-    try {
-      const image = nativeImage.createFromDataURL(imageDataUrl);
-      if (!image.isEmpty()) {
-        clipboard.writeImage(image);
-        imaged = !clipboard.readImage().isEmpty();
-
-        // Windows fallback: some PCs have Chromium/Electron's clipboard
-        // bridge blocked by another clipboard manager/driver, even though
-        // the image itself decoded fine. Writing the bitmap directly via
-        // .NET's clipboard API sidesteps that.
-        if (!imaged && process.platform === "win32") {
-          try {
-            tmpPngFile = path.join(os.tmpdir(), `margin-erp-wa-img-${Date.now()}.png`);
-            fs.writeFileSync(tmpPngFile, image.toPNG());
-            const { spawnSync } = require("node:child_process");
-            const psPath = tmpPngFile.replace(/'/g, "''");
-            const command = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img=[System.Drawing.Image]::FromFile('${psPath}'); try { [System.Windows.Forms.Clipboard]::SetImage($img) } finally { $img.Dispose() }`;
-            const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", command], { windowsHide: true, timeout: 10000 });
-            if (result.status === 0) imaged = true;
-          } catch {
-            /* fall through to PDF */
-          }
-        }
-      }
-    } catch {
-      imaged = false;
-    } finally {
-      try { if (tmpPngFile && fs.existsSync(tmpPngFile)) fs.unlinkSync(tmpPngFile); } catch { /* ignore */ }
-    }
-  }
-
-  let pdfOpened = false;
-  if (!imaged && html) pdfOpened = !!(await createBillPdf(html, widthPx));
-
-  // wa.me is the most reliable external hand-off: the user's default browser
-  // resolves it to WhatsApp Web/Desktop depending on their setup.
-  try {
-    const chatUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
-    await shell.openExternal(chatUrl);
-    return { success: true, imaged, pdfOpened, url: chatUrl };
-  } catch (err) {
-    try {
-      const fallbackUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
-      await shell.openExternal(fallbackUrl);
-      return { success: true, imaged, pdfOpened, url: fallbackUrl, fallback: true };
-    } catch (err2) {
-      return { success: false, errorType: String((err2 && err2.message) || err2 || err), imaged, pdfOpened };
-    }
-  }
-});
-
-ipcMain.handle("whatsapp:send-web", async (_event, payload) => {
-  const html = (payload && payload.html) || "";
-  const phone = String((payload && payload.phone) || "").replace(/[^\d]/g, "");
-  const message = (payload && payload.message) || "";
-  const widthPx = Math.max(280, Math.min(1200, Number(payload && payload.widthPx) || 380));
-
-  if (!phone) return { success: false, errorType: "missing-phone" };
-
-  const imaged = await captureHtmlToClipboardImage(html, widthPx);
-  let pdfOpened = false;
-
-  // If the native image clipboard still cannot be written, create a real PDF
-  // as a reliable fallback and open it. The cashier can attach that PDF from
-  // WhatsApp's document picker instead of being left with a broken action.
-  if (!imaged) {
-    pdfOpened = !!(await createBillPdf(html, widthPx));
-  }
-
-  try {
-    const chatUrl = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
-    await shell.openExternal(chatUrl);
-    return { success: true, imaged, pdfOpened };
-  } catch (err) {
-    return { success: false, errorType: String((err && err.message) || err), imaged, pdfOpened };
-  }
-});

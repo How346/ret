@@ -32,6 +32,7 @@ export type SendReceiptResult = {
   success: boolean;
   mode: "background-whatsapp" | "web-text-only";
   imaged?: boolean;
+  pdfOpened?: boolean;
   errorType?: string;
 };
 
@@ -112,19 +113,34 @@ export async function sendReceiptOnWhatsApp(opts: {
     try {
       const imageDataUrl = await renderBillImageDataUrl(opts.html, widthPx);
       const base64 = imageDataUrl.replace(/^data:image\/png;base64,/, "");
-      const res = await window.electronAPI.sendBillImage(base64, opts.phone, "");
+      const res = await window.electronAPI.sendBillImage(base64, opts.phone, "", opts.html, widthPx);
       return {
         success: !!res?.success,
         mode: "background-whatsapp",
         imaged: !!res?.success,
+        pdfOpened: res?.pdfOpened,
         errorType: res?.errorType,
       };
     } catch (err: any) {
-      return {
-        success: false,
-        mode: "background-whatsapp",
-        errorType: String(err?.message || err),
-      };
+      // Even a renderer-side capture failure shouldn't leave the cashier with
+      // nothing — ask main to at least try the PDF fallback using the raw
+      // bill HTML (no image needed for that path).
+      try {
+        const res = await window.electronAPI.sendBillImage("", opts.phone, "", opts.html, widthPx);
+        return {
+          success: !!res?.success,
+          mode: "background-whatsapp",
+          imaged: false,
+          pdfOpened: res?.pdfOpened,
+          errorType: res?.errorType || String(err?.message || err),
+        };
+      } catch (err2: any) {
+        return {
+          success: false,
+          mode: "background-whatsapp",
+          errorType: String(err2?.message || err2 || err?.message || err),
+        };
+      }
     }
   }
 
@@ -135,17 +151,6 @@ export async function sendReceiptOnWhatsApp(opts: {
   };
 }
 
-// Opens WhatsApp Web in the user's own default browser on this PC, so they
-// can log in (scan the QR code) there once — same as opening
-// web.whatsapp.com in any ordinary browser tab.
-export async function openWhatsAppWeb(): Promise<{ success: boolean; errorType?: string }> {
-  if (isDesktopPrintingAvailable() && window.electronAPI?.openWhatsAppWeb) {
-    try {
-      return await window.electronAPI.openWhatsAppWeb();
-    } catch (err: any) {
-      return { success: false, errorType: String(err?.message || err) };
-    }
-  }
-  window.open("https://web.whatsapp.com", "_blank");
-  return { success: true };
-}
+// Note: there is no browser-based "Open WhatsApp Web" fallback in this
+// build — WhatsApp connects and sends in the background via the QR panel in
+// Settings → WhatsApp (see src/components/whatsapp-qr-panel.tsx).

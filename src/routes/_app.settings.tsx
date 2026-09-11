@@ -343,8 +343,7 @@ function Settings() {
             />
             <p className="text-xs text-muted-foreground -mt-2">
               When on, the POS payment screen shows a "Confirm & Send" button. It saves the sale, then
-              opens a WhatsApp chat for the customer's number with a message pre-filled — on the desktop
-              app the bill image is also copied to your clipboard, ready to paste (Ctrl+V) into the chat.
+              sends the generated bill image directly in the background through the connected WhatsApp session. No bill image is saved to disk and no external WhatsApp browser window is opened.
             </p>
             <div className="grid md:grid-cols-3 gap-4 pt-2 border-t border-border">
               <Field label="Default country code">
@@ -369,33 +368,8 @@ function Settings() {
               Placeholders: <code>{"{customer}"}</code>, <code>{"{shop}"}</code>, <code>{"{invoice}"}</code>, <code>{"{total}"}</code>.
               Numbers with 10 digits automatically get the country code above added in front.
             </p>
-            {isDesktopPrintingAvailable() && (
-              <div className="rounded-md border border-border p-3 space-y-2 pt-3 border-t">
-                <div className="font-semibold flex items-center gap-1 text-sm"><MessageCircle className="h-3.5 w-3.5" /> WhatsApp Web login</div>
-                <p className="text-xs text-muted-foreground">
-                  Sending opens WhatsApp Web in your computer's own default browser (Chrome, Edge,
-                  Firefox — whichever you use) instead of inside this app. Log in there once by
-                  scanning the QR code; your browser remembers it after that, same as any other site.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={waConnecting}
-                  onClick={async () => {
-                    setWaConnecting(true);
-                    try {
-                      const res = await openWhatsAppWeb();
-                      if (!res.success) toast.error("Couldn't open WhatsApp Web");
-                    } finally {
-                      setWaConnecting(false);
-                    }
-                  }}
-                >
-                  {waConnecting && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
-                  Open WhatsApp Web in browser (scan QR / login)
-                </Button>
-              </div>
-            )}
+            <p className="text-xs text-muted-foreground border-t border-border pt-3">The connection above is the only WhatsApp login needed. Once connected, the POS sends only the bill image directly to WhatsApp in the background.</p>
+
           </Card>
         </TabsContent>
 

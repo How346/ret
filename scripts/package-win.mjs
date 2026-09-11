@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { obfuscateElectronMainProcess, obfuscateRendererBundle } from './obfuscate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -49,6 +50,21 @@ const paths = await packager({
   overwrite: true,
   prune: false,
   ignore,
+  // Obfuscate the shipped source right after Packager stages a copy of the
+  // app, so `bun run dev` / a plain `vite build` are completely unaffected
+  // and only what actually goes out the door is protected.
+  afterCopy: [
+    async (buildPath, _electronVersion, _platform, _arch, callback) => {
+      try {
+        console.log('Obfuscating shipped source before finalizing the package…');
+        await obfuscateElectronMainProcess(buildPath);
+        await obfuscateRendererBundle(buildPath);
+        callback();
+      } catch (err) {
+        callback(err);
+      }
+    },
+  ],
 });
 
 console.log('Packaged to:', paths.join(', '));
