@@ -13,14 +13,7 @@ export function WhatsAppQrPanel() {
   useEffect(() => {
     if (!isDesktopPrintingAvailable() || !window.electronAPI?.getWhatsAppStatus) return;
     let offQr = () => {}, offReady = () => {};
-    void window.electronAPI.getWhatsAppStatus().then((s) => {
-      const status = s && typeof s === "object" ? s : {};
-      setReady(!!status.ready);
-      setQr(status.qr || null);
-      setError(status.error || null);
-    }).catch((e) => {
-      setError(String(e?.message || e || "Could not read WhatsApp status"));
-    });
+    void window.electronAPI.getWhatsAppStatus().then(s => { setReady(!!s.ready); setQr(s.qr || null); setError(s.error || null); });
     offQr = window.electronAPI.onWhatsAppQr?.(url => { setQr(url); setReady(false); setError(null); }) || (() => {});
     offReady = window.electronAPI.onWhatsAppReady?.(() => { setReady(true); setQr(null); setError(null); }) || (() => {});
     return () => { offQr(); offReady(); };
@@ -33,8 +26,7 @@ export function WhatsAppQrPanel() {
     setStarting(true);
     try {
       const s = await window.electronAPI.initializeWhatsApp();
-      const status = s && typeof s === "object" ? s : {};
-      setReady(!!status.ready); setQr(status.qr || null); setError(status.error || null);
+      setReady(!!s.ready); setQr(s.qr || null); setError(s.error || null);
     } catch (e: any) {
       setError(String(e?.message || e || "Could not start WhatsApp"));
     } finally { setStarting(false); }
@@ -52,8 +44,7 @@ export function WhatsAppQrPanel() {
               setStarting(true);
               try {
                 const s = await window.electronAPI!.resetWhatsApp!();
-                const status = s && typeof s === "object" ? s : {};
-                setReady(!!status.ready); setQr(status.qr || null); setError(status.error || null);
+                setReady(!!s.ready); setQr(s.qr || null); setError(s.error || null);
               } catch (e: any) {
                 setError(String(e?.message || e || "Could not reset WhatsApp"));
               } finally { setStarting(false); }

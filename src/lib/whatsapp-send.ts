@@ -183,7 +183,7 @@ export async function sendReceiptOnWhatsApp(opts: {
       return {
         success: false,
         mode: "background-whatsapp",
-        errorType: err instanceof Error ? err.message : String((err as any)?.message || err || "WhatsApp sending failed"),
+        errorType: String(err?.message || err),
       };
     }
   }

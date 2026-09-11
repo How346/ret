@@ -24,17 +24,44 @@ function NotFoundComponent() {
   );
 }
 
-function ErrorComponent({ error, reset }: { error: Error | unknown; reset: () => void }) {
-  console.error(error);
+function safeErrorMessage(error: unknown): string {
+  if (error == null) return "The application encountered an unknown startup error.";
+  if (typeof error === "string" && error.trim()) return error.trim();
+  if (typeof error === "object") {
+    const e = error as any;
+    const candidates = [
+      e?.message,
+      e?.error?.message,
+      e?.cause?.message,
+      e?.output?.payload?.message,
+      e?.output?.message,
+      e?.data?.message,
+    ];
+    const value = candidates.find((v) => v != null && String(v).trim());
+    if (value) return String(value);
+  }
+  try {
+    const text = String(error);
+    return text && text !== "[object Object]" ? text : "The application encountered an unknown startup error.";
+  } catch {
+    return "The application encountered an unknown startup error.";
+  }
+}
+
+function ErrorComponent({ error, reset }: { error: unknown; reset: () => void }) {
   const router = useRouter();
-  const safeMessage = error instanceof Error ? error.message : String((error as any)?.message ?? error ?? "Unknown application error");
+  const message = safeErrorMessage(error);
+  console.error("[Margin ERP] route error:", error);
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
         <h1 className="text-xl font-semibold">Something went wrong</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{safeMessage}</p>
+        <p className="mt-2 text-sm text-muted-foreground break-words">{message}</p>
         <button
-          onClick={() => { router.invalidate(); reset(); }}
+          onClick={() => {
+            try { router.invalidate(); } catch {}
+            try { reset(); } catch {}
+          }}
           className="mt-6 inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
         >Try again</button>
       </div>

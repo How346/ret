@@ -4,6 +4,18 @@ const fs = require("node:fs");
 const os = require("node:os");
 const { getHWID, readStoredLicenseAsync, installLicenseAsync, removeLicense } = require("./license.cjs");
 
+process.on("unhandledRejection", (reason) => {
+  const safe = whatsappErrorMessage(reason);
+  console.error("[Margin ERP] Unhandled rejection:", safe);
+  try { sendWhatsAppEvent("whatsapp-error", { error: safe }); } catch {}
+});
+
+process.on("uncaughtException", (error) => {
+  const safe = whatsappErrorMessage(error);
+  console.error("[Margin ERP] Uncaught exception:", safe);
+  try { sendWhatsAppEvent("whatsapp-error", { error: safe }); } catch {}
+});
+
 let mainWindow = null;
 
 // ---------------------------------------------------------------------------
@@ -84,6 +96,10 @@ function whatsappErrorMessage(error) {
 }
 
 
+function whatsappStatusCode(error) {
+  return error?.output?.statusCode ?? error?.data?.statusCode ?? error?.statusCode ?? null;
+}
+
 function clearWhatsAppReconnectTimer() {
   if (whatsappReconnectTimer) {
     clearTimeout(whatsappReconnectTimer);
@@ -117,7 +133,7 @@ function scheduleWhatsAppReconnect() {
 }
 
 async function initializeWhatsApp(options = {}) {
-  if (whatsappReady && whatsappSocket) return { ready: true, qr: null, error: null };
+  if (whatsappReady && whatsappSocket) return { ready: true, qr: null };
   if (whatsappInitPromise) return whatsappInitPromise;
 
   whatsappInitPromise = (async () => {
@@ -156,7 +172,10 @@ async function initializeWhatsApp(options = {}) {
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 8000);
           try {
-            const latest = await fetchLatestWaWebVersion({ signal: controller.signal });
+            const latest = await Promise.race([
+              fetchLatestWaWebVersion(),
+              new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("WA version lookup timed out")), { once: true })),
+            ]);
             if (Array.isArray(latest?.version) && latest.version.length === 3) {
               waVersion = latest.version;
             }
@@ -178,14 +197,13 @@ async function initializeWhatsApp(options = {}) {
         browser: Browsers?.windows?.("Margin ERP Offline") || ["Windows", "Chrome", "Margin ERP Offline"],
         markOnlineOnConnect: false,
         syncFullHistory: false,
-        fireInitQueries: false,
+        fireInitQueries: true,
         generateHighQualityLinkPreview: false,
         connectTimeoutMs: 30000,
         defaultQueryTimeoutMs: 30000,
         keepAliveIntervalMs: 25000,
         retryRequestDelayMs: 250,
         emitOwnEvents: false,
-        shouldSyncHistoryMessage: () => false,
       });
 
       const socket = whatsappSocket;
@@ -224,7 +242,7 @@ async function initializeWhatsApp(options = {}) {
           whatsappReady = false;
           whatsappQrDataUrl = null;
 
-          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          const statusCode = whatsappStatusCode(lastDisconnect?.error);
           const loggedOut = statusCode === DisconnectReason.loggedOut;
           const connectionReplaced = statusCode === DisconnectReason.connectionReplaced;
           const reason = loggedOut
@@ -283,10 +301,10 @@ async function initializeWhatsApp(options = {}) {
 ipcMain.handle("whatsapp:initialize", async () => initializeWhatsApp());
 
 ipcMain.handle("whatsapp:status", async () => ({
-  ready: !!whatsappReady,
-  qr: whatsappQrDataUrl || null,
-  initializing: !!whatsappInitializing,
-  error: whatsappLastError || null,
+  ready: whatsappReady,
+  qr: whatsappQrDataUrl,
+  initializing: whatsappInitializing,
+  error: whatsappLastError,
 }));
 
 // Completely reset only the Baileys WhatsApp session. This is useful when a
@@ -343,10 +361,22 @@ ipcMain.handle("send-bill-image", async (_event, payload) => {
     const socket = whatsappSocket;
     if (!socket) return { success: false, errorType: "WhatsApp connection is unavailable. Try again." };
 
-    // Do not perform a separate onWhatsApp query here. It adds an extra network
-    // round-trip and, on some WA revisions, can return an incomplete/null node.
-    // Sending directly to the canonical PN JID is both faster and more reliable.
-    const resolvedJid = jid;
+    // Verify the number first so an invalid/non-WhatsApp number produces a clear
+    // error instead of a confusing send failure.
+    let resolvedJid = jid;
+    try {
+      if (typeof socket.onWhatsApp === "function") {
+        const result = await socket.onWhatsApp(jid);
+        const firstResult = Array.isArray(result) ? result[0] : null;
+        if (firstResult && firstResult.exists === false) {
+          return { success: false, errorType: "This phone number is not registered on WhatsApp." };
+        }
+        if (firstResult?.jid) resolvedJid = firstResult.jid;
+      }
+    } catch {
+      // A transient lookup failure should not block a valid send; send using the
+      // canonical PN JID and let WhatsApp return the definitive result.
+    }
 
     const sendPayload = {
       image: imageBuffer,
