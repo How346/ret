@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Plus, Pencil, Search, AlertTriangle, Upload, Download, Tags, Loader2, Trash2, Printer, Image as ImageIcon, Layers, History as HistoryIcon, Eye } from "lucide-react";
 import { inr, num } from "@/lib/format";
+import { formatIndianDate } from "@/lib/date-format";
 import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { buildFixedLabelJob, printTsplDirect, type FixedLabel } from "@/lib/tspl";
