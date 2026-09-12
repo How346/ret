@@ -175,10 +175,13 @@ export function buildReceiptHtml(opts: {
       margin: 1px 0 2px;
     }
     .hr {
-      height: 1px; margin: 4px 0; border: 0;
-      background: repeating-linear-gradient(to right, #000 0, #000 3px, transparent 3px, transparent 6px);
+      border: 0; border-top: 1px dashed #000;
+      height: 0; line-height: 0; font-size: 0; margin: 4px 0;
     }
-    .hr2 { height: 1.5px; margin: 4px 0; border: 0; background: #000; }
+    .hr2 {
+      border: 0; border-top: 1.5px solid #000;
+      height: 0; line-height: 0; font-size: 0; margin: 4px 0;
+    }
     .row { display:flex; justify-content:space-between; gap:8px; }
     table { width:100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
     th, td { padding: 2px 2px; vertical-align: top; }

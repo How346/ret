@@ -479,6 +479,10 @@ function createWindow() {
     width: 1440,
     height: 900,
     show: false,
+    // Matches the app's own light-theme background so that if any sliver of
+    // the window paints before the React UI has mounted, it blends in
+    // instead of flashing as a stark white/empty bordered box.
+    backgroundColor: "#F8FAFD",
     autoHideMenuBar: true,
     title: "Margin ERP — Offline",
     webPreferences: {
@@ -495,8 +499,21 @@ function createWindow() {
     shown = true;
     try { win.show(); win.maximize(); } catch {}
   };
-  win.once("ready-to-show", showWindow);
-  win.webContents.once("did-finish-load", showWindow);
+  // Chromium's own "ready-to-show" fires on the very first paint, which for
+  // a single-page app is usually still just the empty <div id="root"></div>
+  // shell — showing the window then is exactly what produced the brief
+  // "empty bordered frame" at startup. Instead, wait for the page to finish
+  // loading and then for two real animation frames to elapse, which is a
+  // reliable signal that React has actually mounted and painted the UI.
+  win.webContents.once("did-finish-load", () => {
+    void win.webContents
+      .executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+      .catch(() => {})
+      .finally(showWindow);
+  });
+  // Safety net: if did-finish-load never fires for some reason, still show
+  // the window eventually instead of leaving the app invisible forever.
+  win.once("ready-to-show", () => setTimeout(showWindow, 1500));
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame) return;
     console.error(`[Margin ERP] renderer failed to load: ${errorCode} ${errorDescription} ${validatedURL}`);
