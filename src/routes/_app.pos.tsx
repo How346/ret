@@ -809,7 +809,11 @@ function POS() {
               invoiceNo: invNo as unknown as string,
               cart: distCart.map(it => {
                 const prod = products.find(p => p.id === it.product_id.split(":")[0]);
-                return { name: it.name, hsn_code: it.hsn_code, qty: it.qty, price: it.price, mrp: it.mrp ?? prod?.mrp ?? it.price, discount: it.discount, gst_rate: it.gst_rate };
+                // Always resolve the product name from the live product record
+                // when the cart item name is empty/stale. This prevents a blank
+                // Description cell in printed or WhatsApp bills.
+                const productName = String(it.name ?? "").trim() || String(prod?.name ?? "").trim() || "Item";
+                return { name: productName, product_name: productName, description: productName, hsn_code: it.hsn_code ?? prod?.hsn_code, qty: it.qty, price: it.price, mrp: it.mrp ?? prod?.mrp ?? it.price, discount: it.discount, gst_rate: it.gst_rate };
               }),
               totals: { subtotal: totals.subtotal, cgst: totals.cgst, sgst: totals.sgst, discount: 0, total: totals.total },
               payment: split,

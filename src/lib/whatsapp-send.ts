@@ -39,7 +39,7 @@ async function renderBillImageDataUrl(html: string, widthPx: number): Promise<st
   const width = Math.max(280, Math.min(1200, Number(widthPx) || 380));
 
   // IMPORTANT: render the exact receipt HTML in Electron's Chromium page and
-  // capture that page. html2canvas was causing 1px/line-height and border
+  // capture that page. client-side canvas rendering was causing 1px/line-height and border
   // compositing artefacts (dashed separators appearing through text) on some
   // Windows builds. Chromium capturePage uses the same layout engine used for
   // printing, so the WhatsApp image now matches the real invoice layout.
