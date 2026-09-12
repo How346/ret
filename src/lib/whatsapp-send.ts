@@ -60,7 +60,7 @@ export async function sendReceiptOnWhatsApp(opts: {
   message?: string;
   paperSize?: "58mm" | "80mm" | "A4";
 }): Promise<SendReceiptResult> {
-  const widthPx = opts.paperSize === "58mm" ? 260 : opts.paperSize === "A4" ? 794 : 360;
+  const widthPx = opts.paperSize === "58mm" ? 300 : opts.paperSize === "A4" ? 900 : 400;
 
   if (isDesktopPrintingAvailable() && window.electronAPI?.sendBillImage) {
     try {

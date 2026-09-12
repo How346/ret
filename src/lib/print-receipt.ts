@@ -131,10 +131,12 @@ export function buildReceiptHtml(opts: {
 
   const rows = opts.cart
     .map((it, i) => {
-      const productName = String(it.name ?? it.product_name ?? it.description ?? "").trim() || "Item";
+      const productName = [it.name, it.product_name, it.description]
+        .map(v => String(v ?? "").trim())
+        .find(v => v.length > 0) || "Item";
       const amt = it.price * it.qty - (it.discount || 0);
       return `<tr>
-        <td class="c">${i + 1}</td>
+        <td class="s">${i + 1}</td>
         <td class="desc"><span class="product-name">${escapeHtml(productName)}</span></td>
         <td class="r">${it.qty}</td>
         <td class="r">${money(it.mrp ?? it.price)}</td>
@@ -152,7 +154,8 @@ export function buildReceiptHtml(opts: {
     @page { size: ${widthMm}mm auto; margin: 0; }
     @media print { html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
     * { box-sizing: border-box; }
-    html, body { margin:0; padding:0; background:#fff; color:#000; }
+    html, body { margin:0; padding:0; background:#fff; color:#000; scrollbar-width:none; -ms-overflow-style:none; }
+    html::-webkit-scrollbar, body::-webkit-scrollbar { width:0; height:0; display:none; }
     body {
       font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
       font-size: ${fontSize}px;
@@ -214,8 +217,17 @@ export function buildReceiptHtml(opts: {
       line-height: 1.35;
     }
     .row > :last-child { text-align:right; min-width:0; }
-    table { width:100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
-    th, td { padding: 3px 2px; vertical-align: top; line-height: 1.3; }
+    table { width:100%; border-collapse: collapse; border-spacing:0; table-layout:fixed; }
+    col.s-col { width:10%; }
+    col.desc-col { width:32%; }
+    col.qty-col { width:10%; }
+    col.mrp-col { width:16%; }
+    col.rate-col { width:16%; }
+    col.amt-col { width:16%; }
+    th, td { padding: 3px 2px; vertical-align: top; line-height:1.3; }
+    th.desc-head, td.desc { text-align:left; }
+    th.s-head, td.s { text-align:center; }
+    .desc .product-name { display:block; width:100%; text-align:left; white-space:normal; word-break:normal; overflow-wrap:anywhere; }
     th { font-weight: ${bold ? 800 : 500}; border-bottom: 1px solid #000; }
     .c { text-align:center; }
     .r { text-align:right; font-variant-numeric: tabular-nums; }
@@ -225,9 +237,6 @@ export function buildReceiptHtml(opts: {
     tbody td { border:0; }
     .copy { break-inside: avoid; }
 
-    th.s, td.c:first-child { width: 7%; }
-    th.q, td.r.q { width: 9%; }
-    th.m, th.rt, th.a { width: 16%; }
     .sumLeft { font-weight: ${bold ? 800 : 500}; }
     .gtotal { font-weight: ${bold ? 900 : 600}; font-size:${fontSize + 2}px; }
     .copy { page-break-after: always; }
@@ -253,9 +262,13 @@ export function buildReceiptHtml(opts: {
     <div class="hr"></div>
     <table>
       <thead>
+        <colgroup>
+          <col class="s-col"/><col class="desc-col"/><col class="qty-col"/>
+          <col class="mrp-col"/><col class="rate-col"/><col class="amt-col"/>
+        </colgroup>
         <tr>
-          <th class="s c">S.</th>
-          <th>Description</th>
+          <th class="s-head">S.</th>
+          <th class="desc-head">Description</th>
           <th class="q r">Qty</th>
           <th class="m r">MRP</th>
           <th class="rt r">RATE</th>

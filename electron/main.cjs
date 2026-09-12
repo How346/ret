@@ -367,7 +367,7 @@ ipcMain.handle("render-bill-image", async (_event, payload) => {
     // Render at a high internal scale so small receipt text stays sharp after
     // WhatsApp's image processing.  The CSS/layout width remains the real
     // receipt width; Chromium simply paints it at 3x resolution.
-    const scale = 3;
+    const scale = 4;
     const width = Math.max(280, Math.min(1200, Math.round(requestedWidth)));
     const outputWidth = width * scale;
     if (!html.trim()) return { success: false, errorType: "Bill HTML is empty." };
@@ -401,8 +401,14 @@ ipcMain.handle("render-bill-image", async (_event, payload) => {
         document.documentElement.style.width = '${width}px';
         document.body.style.width = '${width}px';
         document.body.style.maxWidth = '${width}px';
+        document.documentElement.style.overflow = 'hidden';
         document.body.style.overflow = 'visible';
+        document.documentElement.style.scrollbarWidth = 'none';
+        document.body.style.scrollbarWidth = 'none';
         document.body.style.zoom = '1';
+        const style = document.createElement('style');
+        style.textContent = 'html::-webkit-scrollbar,body::-webkit-scrollbar{width:0!important;height:0!important;display:none!important;}';
+        document.head.appendChild(style);
         try { if (document.fonts?.ready) await document.fonts.ready; } catch (_) {}
         const imgs = Array.from(document.images || []);
         await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => {
@@ -711,6 +717,90 @@ ipcMain.handle("print:html", async (_event, payload) => {
         /* ignore */
       }
     }, 1500);
+  }
+});
+
+ipcMain.handle("print:raw", async (_event, payload) => {
+  const data = String(payload?.data || "");
+  const opts = payload?.options || {};
+  const jobName = String(opts.jobName || "Margin ERP Labels").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+  if (!data) return { success: false, errorType: "Empty .prn print job" };
+
+  // Labels are intentionally raw-printed. This sends TSPL directly to the
+  // selected Windows printer/driver instead of trying to render TSPL as HTML.
+  let tmpFile = null;
+  try {
+    const printerName = String(opts.deviceName || "").trim();
+    if (!printerName) {
+      return { success: false, errorType: "No label printer selected. Go to Settings → Barcode label printer and select your printer." };
+    }
+    if (process.platform !== "win32") {
+      return { success: false, errorType: "Raw .prn label printing is supported on Windows desktop builds." };
+    }
+
+    tmpFile = path.join(os.tmpdir(), `margin-erp-${Date.now()}-${Math.random().toString(36).slice(2)}.prn`);
+    fs.writeFileSync(tmpFile, Buffer.from(data, "utf8"));
+
+    const printerB64 = Buffer.from(printerName, "utf8").toString("base64");
+    const fileB64 = Buffer.from(tmpFile, "utf8").toString("base64");
+
+    // Win32 StartDocPrinter(..., RAW, ...) sends TSPL directly through the
+    // selected Windows printer spooler. No browser/device pairing is used.
+    const ps = `
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class MarginErpRawPrinter {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+  public class DOCINFO { public string pDocName; public string pOutputFile; public string pDataType; }
+  [DllImport("winspool.drv", SetLastError=true, CharSet=CharSet.Unicode)] static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
+  [DllImport("winspool.drv", SetLastError=true)] static extern bool ClosePrinter(IntPtr hPrinter);
+  [DllImport("winspool.drv", SetLastError=true, CharSet=CharSet.Unicode)] static extern int StartDocPrinter(IntPtr hPrinter, int level, DOCINFO di);
+  [DllImport("winspool.drv", SetLastError=true)] static extern bool EndDocPrinter(IntPtr hPrinter);
+  [DllImport("winspool.drv", SetLastError=true)] static extern int StartPagePrinter(IntPtr hPrinter);
+  [DllImport("winspool.drv", SetLastError=true)] static extern bool EndPagePrinter(IntPtr hPrinter);
+  [DllImport("winspool.drv", SetLastError=true)] static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+  public static void Print(string printer, string file, string job) {
+    IntPtr h;
+    if (!OpenPrinter(printer, out h, IntPtr.Zero)) throw new Exception("Could not open printer: " + printer + " (Win32 " + Marshal.GetLastWin32Error() + ")");
+    try {
+      byte[] bytes = System.IO.File.ReadAllBytes(file);
+      var di = new DOCINFO { pDocName = job, pOutputFile = null, pDataType = "RAW" };
+      int doc = StartDocPrinter(h, 1, di);
+      if (doc <= 0) throw new Exception("Could not start printer job (Win32 " + Marshal.GetLastWin32Error() + ")");
+      try {
+        if (!StartPagePrinter(h)) throw new Exception("Could not start printer page (Win32 " + Marshal.GetLastWin32Error() + ")");
+        try {
+          IntPtr ptr = Marshal.AllocHGlobal(bytes.Length);
+          try { Marshal.Copy(bytes, 0, ptr, bytes.Length); int written; if (!WritePrinter(h, ptr, bytes.Length, out written) || written != bytes.Length) throw new Exception("Printer accepted only " + written + " of " + bytes.Length + " bytes (Win32 " + Marshal.GetLastWin32Error() + ")"); }
+          finally { Marshal.FreeHGlobal(ptr); }
+        } finally { EndPagePrinter(h); }
+      } finally { EndDocPrinter(h); }
+    } finally { ClosePrinter(h); }
+  }
+}
+'@
+$p=[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${printerB64}'))
+$f=[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${fileB64}'))
+MarginErpRawPrinter::Print($p,$f,'${jobName.replace("'", "''")}')
+`;
+    const encoded = Buffer.from(ps, "utf16le").toString("base64");
+    await new Promise((resolve, reject) => {
+      const child = require("child_process").spawn(process.env.SystemRoot + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-EncodedCommand", encoded,
+      ], { windowsHide: true });
+      let stderr = "";
+      child.stderr.on("data", d => { stderr += d.toString(); });
+      child.on("error", reject);
+      child.on("close", code => code === 0 ? resolve() : reject(new Error(stderr.trim() || `Windows print spooler exited with code ${code}`)));
+    });
+    return { success: true };
+  } catch (err) {
+    return { success: false, errorType: String(err?.message || err) };
+  } finally {
+    try { if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch {}
   }
 });
 

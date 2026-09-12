@@ -639,7 +639,7 @@ function LabelDialog({ open, onClose, items, shopName }: {
     setBusy(true);
     try {
       const mode = await printTsplDirect(tspl, "labels");
-      toast.success(mode === "usb" ? "Sent to printer" : "Printer not paired — file downloaded");
+      toast.success(mode === "printer" ? "Labels sent to selected printer" : "PRN downloaded — open the desktop app to print directly");
     } catch (e: any) {
       toast.error(e?.message || "Print failed");
     } finally { setBusy(false); }
@@ -651,7 +651,7 @@ function LabelDialog({ open, onClose, items, shopName }: {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Tags className="h-5 w-5" /> Print Barcode Labels — TSC TTP-244 Pro</DialogTitle>
           <p className="text-xs text-muted-foreground">
-            Fixed 2-up layout on 76 × 25 mm roll (25 × 38 mm each). First click asks you to pick the USB printer once, then prints directly.
+            Fixed 2-up layout on 76 × 25 mm roll (25 × 38 mm each). Labels print directly to the printer selected in Settings.
           </p>
         </DialogHeader>
         <div className="border rounded max-h-72 overflow-auto">

@@ -1,9 +1,11 @@
 // TSPL / TSPL2 command generator for TSC TTP-244 Pro and compatible thermal
-// label printers. Produces raw text commands that can be sent to the printer
-// via USB / LPT / TCP or downloaded as a .prn file.
+// label printers. Desktop builds send the raw job to the Windows printer
+// selected in Settings; web builds can still download a .prn file.
 
 export type Sensor = "GAP" | "BLINE" | "CONTINUOUS";
 export type Rotation = 0 | 90 | 180 | 270;
+
+import { getPrinterPrefs } from "@/lib/printer-prefs";
 
 export type PrinterProfileConfig = {
   paperWidthMm: number;   // media / roll width (e.g. 76)
@@ -229,70 +231,30 @@ export function buildFixedLabelJob(items: FixedLabel[]): string {
   return out.join("");
 }
 
-/* ---------- WebUSB direct print ---------- */
+/* ---------- Native Windows RAW .PRN printing ---------- */
 
-const USB_KEY = "tsc_usb_device_v1";
-
-async function pickPrinter(): Promise<any> {
-  const usb: any = (navigator as any).usb;
-  if (!usb) throw new Error("WebUSB is not available in this browser. Use Chrome/Edge over HTTPS.");
-  // TSC vendor id is 0x1203; also allow generic printer class (7).
-  const device = await usb.requestDevice({
-    filters: [
-      { vendorId: 0x1203 },              // TSC
-      { classCode: 7 },                  // USB Printer class
-    ],
-  });
-  try { localStorage.setItem(USB_KEY, `${device.vendorId}:${device.productId}`); } catch {}
-  return device;
-}
-
-async function getPairedPrinter(): Promise<any | null> {
-  const usb: any = (navigator as any).usb;
-  if (!usb?.getDevices) return null;
-  const saved = localStorage.getItem(USB_KEY);
-  const list = await usb.getDevices();
-  if (!list?.length) return null;
-  if (saved) {
-    const [vid, pid] = saved.split(":").map(Number);
-    return list.find((d: any) => d.vendorId === vid && d.productId === pid) ?? list[0];
-  }
-  return list[0];
-}
-
-/** Send raw TSPL over WebUSB. Falls back to .prn download if unsupported. */
-export async function printTsplDirect(tspl: string, jobName = "labels"): Promise<"usb" | "download"> {
-  const usb: any = (navigator as any).usb;
-  if (!usb) {
-    downloadTsplFile(jobName, tspl);
-    return "download";
-  }
-  let device = await getPairedPrinter();
-  if (!device) device = await pickPrinter();
-  await device.open();
-  if (device.configuration === null) await device.selectConfiguration(1);
-  // Find printer interface + OUT endpoint
-  const cfg = device.configuration;
-  let ifaceNum = 0;
-  let outEp = 1;
-  outer: for (const iface of cfg.interfaces) {
-    for (const alt of iface.alternates) {
-      if (alt.interfaceClass === 7 || alt.interfaceClass === 0xff) {
-        ifaceNum = iface.interfaceNumber;
-        const ep = alt.endpoints.find((e: any) => e.direction === "out");
-        if (ep) { outEp = ep.endpointNumber; break outer; }
-      }
+/**
+ * Send a TSPL/.PRN job to the label printer selected in Settings.
+ * Electron uses the Windows print spooler in RAW mode, so the printer
+ * receives the TSPL commands unchanged. No device pairing is required.
+ */
+export async function printTsplDirect(tspl: string, jobName = "labels"): Promise<"printer" | "download"> {
+  const api = (window as any).electronAPI;
+  if (api?.printRaw) {
+    const labelPrinter = String(getPrinterPrefs().labelPrinter || "").trim();
+    if (!labelPrinter) {
+      throw new Error("No label printer selected. Go to Settings → Barcode label printer and select your printer.");
     }
+    const result = await api.printRaw(tspl, { kind: "label", deviceName: labelPrinter, jobName });
+    if (!result?.success) {
+      throw new Error(result?.errorType || "Label printing failed. Select a label printer in Settings.");
+    }
+    return "printer";
   }
-  try { await device.claimInterface(ifaceNum); } catch { /* already claimed */ }
-  const bytes = new TextEncoder().encode(tspl);
-  // Split into 64KB chunks to be safe
-  const CHUNK = 64 * 1024;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    await device.transferOut(outEp, bytes.slice(i, i + CHUNK));
-  }
-  try { await device.releaseInterface(ifaceNum); } catch {}
-  try { await device.close(); } catch {}
-  return "usb";
-}
 
+  // Browser/web fallback: there is no safe way for a browser to access the
+  // Windows spooler directly, so retain a simple .prn download outside the
+  // desktop app. The offline Electron build always uses the selected printer.
+  downloadTsplFile(jobName, tspl);
+  return "download";
+}

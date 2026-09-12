@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Prints an HTML string. options: { deviceName?, silent?, copies? }
   // Resolves to { success: boolean, errorType?: string }.
   printHTML: (html, options) => ipcRenderer.invoke("print:html", { html, options }),
+  // Sends raw TSPL/.PRN bytes to the Windows print spooler. The printer
+  // is selected in Settings; no WebUSB pairing is needed.
+  printRaw: (data, options) => ipcRenderer.invoke("print:raw", { data, options }),
 
   // Background Baileys integration. No Chromium/Puppeteer process is used.
   // The QR is returned as a data URL and bill images are sent with the

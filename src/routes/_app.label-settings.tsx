@@ -10,9 +10,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import {
   DEFAULT_TSC_244_PRO, PrinterProfileConfig, tsplTestSample, tsplCalibrate,
-  tsplPrintJob, downloadTsplFile, Sensor, Rotation,
+  tsplPrintJob, printTsplDirect, Sensor, Rotation,
 } from "@/lib/tspl";
-import { Printer, Save, Trash2, Play, Ruler, FileDown } from "lucide-react";
+import { Printer, Save, Trash2, Play, Ruler } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/_app/label-settings")({ component: LabelSettings });
@@ -83,8 +83,18 @@ function LabelSettings() {
     qc.invalidateQueries({ queryKey: ["printer_profiles"] });
   };
 
-  const testPrint = () => downloadTsplFile("test-print", tsplTestSample(cfg));
-  const calibrate = () => downloadTsplFile("calibrate", tsplCalibrate(cfg));
+  const testPrint = async () => {
+    try {
+      await printTsplDirect(tsplTestSample(cfg), "test-print.prn");
+      toast.success("Test label sent to the selected printer");
+    } catch (e: any) { toast.error(e?.message || "Test print failed"); }
+  };
+  const calibrate = async () => {
+    try {
+      await printTsplDirect(tsplCalibrate(cfg), "calibrate.prn");
+      toast.success("Calibration command sent to the selected printer");
+    } catch (e: any) { toast.error(e?.message || "Calibration failed"); }
+  };
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto space-y-4">
@@ -171,8 +181,8 @@ function LabelSettings() {
           </div>
 
           <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-            <p><b>How printing works:</b> browsers can't send raw TSPL to USB printers directly. Click <b>Test print</b> or <b>Calibrate</b> to download a <code>.prn</code> file, then send it to the TSC printer share (drag on the printer icon, or <code>copy /b file.prn LPT1:</code>).</p>
-            <p>For everyday label printing from the Products page use the HTML print flow; this settings page owns raw TSPL for advanced/native use.</p>
+            <p><b>How printing works:</b> on the Windows desktop app, TSPL/.PRN is sent directly to the <b>Barcode label printer selected in Settings</b>. No USB pairing is required.</p>
+            <p>Use <b>Test print</b> to verify the selected printer and <b>Calibrate</b> after changing label stock.</p>
           </div>
         </Card>
 
@@ -243,11 +253,11 @@ function SampleInputs({ cfg }: { cfg: PrinterProfileConfig }) {
 
   const printOne = () => {
     const items = Array.from({ length: cfg.columns }, () => ({ productName: name, sku, price, batch, barcode, qr }));
-    downloadTsplFile(`labels-${sku}`, tsplPrintJob(items, cfg));
+    printTsplDirect(tsplPrintJob(items, cfg), `labels-${sku}.prn`).then(() => toast.success("Sample labels sent to the selected printer")).catch((e: any) => toast.error(e?.message || "Label print failed"));
   };
   return (
     <div className="rounded-md border p-3 space-y-2">
-      <div className="text-xs font-semibold flex items-center gap-1"><FileDown className="h-3.5 w-3.5" /> Generate a .prn for one row</div>
+      <div className="text-xs font-semibold flex items-center gap-1"><Printer className="h-3.5 w-3.5" /> Print one test row</div>
       <div className="grid grid-cols-2 gap-2">
         <Input placeholder="Product name" value={name} onChange={e => setName(e.target.value)} />
         <Input placeholder="SKU" value={sku} onChange={e => setSku(e.target.value)} />
@@ -256,7 +266,7 @@ function SampleInputs({ cfg }: { cfg: PrinterProfileConfig }) {
         <Input placeholder="Barcode (Code128)" value={barcode} onChange={e => setBarcode(e.target.value)} />
         <Input placeholder="QR (optional)" value={qr} onChange={e => setQr(e.target.value)} />
       </div>
-      <Button size="sm" onClick={printOne}><FileDown className="h-3.5 w-3.5 mr-1" /> Download .prn</Button>
+      <Button size="sm" onClick={printOne}><Printer className="h-3.5 w-3.5 mr-1" /> Print sample</Button>
     </div>
   );
 }
