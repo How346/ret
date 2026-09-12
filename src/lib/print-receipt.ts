@@ -155,7 +155,7 @@ export function buildReceiptHtml(opts: {
       font-size: ${fontSize}px;
       width: ${widthMm}mm;
       padding: ${mTop}mm ${mRight}mm ${mBot}mm ${mLeft}mm;
-      line-height: ${lineH};
+      line-height: ${Math.max(1.25, lineH)};
       font-weight: ${bold ? 600 : 400};
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
@@ -176,19 +176,32 @@ export function buildReceiptHtml(opts: {
     }
     .hr {
       border: 0; border-top: 1px dashed #000;
-      height: 0; line-height: 0; font-size: 0; margin: 4px 0;
+      height: 0; line-height: 0; font-size: 0; margin: 8px 0;
+      clear: both;
     }
     .hr2 {
       border: 0; border-top: 1.5px solid #000;
-      height: 0; line-height: 0; font-size: 0; margin: 4px 0;
+      height: 0; line-height: 0; font-size: 0; margin: 8px 0;
+      clear: both;
     }
-    .row { display:flex; justify-content:space-between; gap:8px; }
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: baseline;
+      column-gap: 10px;
+      min-height: 1.35em;
+      line-height: 1.35;
+    }
+    .row > :last-child { text-align:right; min-width:0; }
     table { width:100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
-    th, td { padding: 2px 2px; vertical-align: top; }
+    th, td { padding: 3px 2px; vertical-align: top; line-height: 1.3; }
     th { font-weight: ${bold ? 800 : 500}; border-bottom: 1px solid #000; }
     .c { text-align:center; }
     .r { text-align:right; font-variant-numeric: tabular-nums; }
-    .desc { word-break: break-word; }
+    .desc { word-break: break-word; overflow-wrap:anywhere; }
+    tbody tr { break-inside: avoid; page-break-inside: avoid; }
+    .copy { break-inside: avoid; }
+
     th.s, td.c:first-child { width: 7%; }
     th.q, td.r.q { width: 9%; }
     th.m, th.rt, th.a { width: 16%; }

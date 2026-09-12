@@ -25,6 +25,7 @@ type ElectronPrintAPI = {
   initializeWhatsApp?: () => Promise<{ ready: boolean; qr?: string | null; error?: string | null }>;
   getWhatsAppStatus?: () => Promise<{ ready: boolean; qr?: string | null; initializing?: boolean; error?: string | null }>;
   resetWhatsApp?: () => Promise<{ ready: boolean; qr?: string | null; error?: string | null }>;
+  renderBillImage?: (html: string, widthPx: number) => Promise<{ success: boolean; imageDataUrl?: string; errorType?: string }>;
   sendBillImage?: (base64Image: string, phone: string, message: string) => Promise<{ success: boolean; errorType?: string; qr?: string | null; imaged?: boolean; messaged?: boolean }>;
   onWhatsAppQr?: (callback: (dataUrl: string) => void) => () => void;
   onWhatsAppReady?: (callback: (payload: any) => void) => () => void;

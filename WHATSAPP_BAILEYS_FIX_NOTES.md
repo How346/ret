@@ -9,7 +9,7 @@ This build fixes the WhatsApp error:
 - Normalizes Baileys/Boom/null errors before they reach the POS UI.
 - Protects the asynchronous `connection.update` handler from unhandled exceptions.
 - Treats a stale socket between the ready check and image upload as recoverable and reconnects once before retrying the same in-memory image.
-- Sends the PNG bill and configured message together as one WhatsApp image message with caption.
+- Renders the receipt with Electron Chromium (not html2canvas) and sends the resulting clean PNG together with the configured message as one WhatsApp image caption.
 - Adds Settings → WhatsApp → Reset & reconnect for a corrupted/old Baileys session.
 - Keeps the bill image entirely in memory.
 

@@ -16,7 +16,7 @@ The first connection shows a QR code in **Settings → WhatsApp**. Scan it from 
 
 ## Sending bills
 
-The POS renders the complete invoice to PNG in memory, then sends one WhatsApp image message. The Settings message template is sent as the image caption, so there is no separate race between an image and text message. No bill image is saved to disk by the Baileys send path.
+The POS sends the complete invoice HTML to Electron Chromium, which renders and captures a clean PNG in memory; that PNG is then sent as one WhatsApp image message. The Settings message template is sent as the image caption, so there is no separate race between an image and text message. No bill image is saved to disk by the Baileys send path.
 
 ## Performance
 

@@ -355,6 +355,86 @@ ipcMain.handle("whatsapp:reset", async () => {
   }
 });
 
+// Render the receipt with Electron's real Chromium layout engine and return a
+// PNG data URL. The temporary HTML file is only a renderer input; the final
+// image remains in memory and is never persisted as a bill file.
+ipcMain.handle("render-bill-image", async (_event, payload) => {
+  let tmpFile = null;
+  let shotWin = null;
+  try {
+    const html = String(payload?.html || "");
+    const requestedWidth = Number(payload?.widthPx) || 380;
+    const width = Math.max(280, Math.min(1200, Math.round(requestedWidth)));
+    if (!html.trim()) return { success: false, errorType: "Bill HTML is empty." };
+
+    tmpFile = path.join(os.tmpdir(), `margin-erp-wa-render-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
+    fs.writeFileSync(tmpFile, html, "utf8");
+
+    shotWin = new BrowserWindow({
+      show: false,
+      width,
+      height: 1000,
+      x: -10000,
+      y: -10000,
+      skipTaskbar: true,
+      focusable: false,
+      backgroundColor: "#ffffff",
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+
+    await shotWin.loadFile(tmpFile);
+    await shotWin.webContents.executeJavaScript(`
+      (async () => {
+        document.documentElement.style.width = '${width}px';
+        document.body.style.width = '${width}px';
+        document.body.style.maxWidth = '${width}px';
+        document.body.style.overflow = 'visible';
+        try { if (document.fonts?.ready) await document.fonts.ready; } catch (_) {}
+        const imgs = Array.from(document.images || []);
+        await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => {
+          img.addEventListener('load', r, { once: true });
+          img.addEventListener('error', r, { once: true });
+        })));
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return true;
+      })()
+    `, true);
+
+    const size = await shotWin.webContents.executeJavaScript(`({
+      width: ${width},
+      height: Math.ceil(Math.max(
+        document.documentElement.scrollHeight || 0,
+        document.body?.scrollHeight || 0,
+        document.documentElement.offsetHeight || 0,
+        document.body?.offsetHeight || 0
+      ))
+    })`, true);
+
+    const height = Math.max(120, Math.min(10000, Number(size?.height) || 600));
+    shotWin.setSize(width, height);
+    await shotWin.webContents.executeJavaScript(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`, true);
+
+    try { shotWin.showInactive(); } catch {}
+    await new Promise(r => setTimeout(r, 100));
+
+    const image = await shotWin.webContents.capturePage({ x: 0, y: 0, width, height });
+    if (!image || image.isEmpty()) return { success: false, errorType: "Chromium returned an empty bill image." };
+
+    const png = image.toPNG();
+    if (!png?.length) return { success: false, errorType: "Could not encode the bill image as PNG." };
+    return { success: true, imageDataUrl: `data:image/png;base64,${png.toString("base64")}` };
+  } catch (error) {
+    return { success: false, errorType: whatsappErrorMessage(error) };
+  } finally {
+    try { if (shotWin && !shotWin.isDestroyed()) shotWin.destroy(); } catch {}
+    try { if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch {}
+  }
+});
+
 // Sends one WhatsApp message containing the complete PNG bill and the configured
 // message as its caption. The PNG stays in memory and is never written to disk.
 ipcMain.handle("send-bill-image", async (_event, payload) => {

@@ -1,4 +1,3 @@
-import html2canvas from "html2canvas";
 import { isDesktopPrintingAvailable } from "@/lib/printer-prefs";
 
 const DEFAULT_TEMPLATE =
@@ -38,125 +37,21 @@ export type SendReceiptResult = {
 
 async function renderBillImageDataUrl(html: string, widthPx: number): Promise<string> {
   const width = Math.max(280, Math.min(1200, Number(widthPx) || 380));
-  const iframe = document.createElement("iframe");
 
-  // Use a same-origin iframe so the original receipt's <html>/<body> CSS is
-  // preserved exactly. This avoids the common html2canvas problem where a
-  // cloned receipt loses body padding or gets clipped at the renderer height.
-  iframe.setAttribute("aria-hidden", "true");
-  iframe.style.position = "fixed";
-  iframe.style.left = "-100000px";
-  iframe.style.top = "0";
-  iframe.style.width = `${width}px`;
-  iframe.style.height = "100px";
-  iframe.style.border = "0";
-  iframe.style.visibility = "visible";
-  iframe.style.pointerEvents = "none";
-  document.body.appendChild(iframe);
-
-  try {
-    const frameDoc = iframe.contentDocument;
-    if (!frameDoc) throw new Error("Could not create the bill image document.");
-
-    frameDoc.open();
-    frameDoc.write(html || "<!doctype html><html><body></body></html>");
-    frameDoc.close();
-
-    await new Promise<void>((resolve) => {
-      if (frameDoc.readyState === "complete") resolve();
-      else iframe.addEventListener("load", () => resolve(), { once: true });
-    });
-
-    const body = frameDoc.body;
-    const docEl = frameDoc.documentElement;
-    if (!body) throw new Error("Bill HTML has no body to capture.");
-
-    // Force the exact thermal/A4 width and preserve the configured margins.
-    body.style.width = `${width}px`;
-    body.style.maxWidth = `${width}px`;
-    body.style.minHeight = "0";
-    body.style.height = "auto";
-    body.style.overflow = "visible";
-    body.style.boxSizing = "border-box";
-    body.style.background = "#fff";
-    body.style.color = "#000";
-    body.style.margin = body.style.margin || "0";
-    body.style.paddingBottom = `calc(${body.style.paddingBottom || "0px"} + 16px)`;
-
-    // Ensure all images and fonts have settled before measuring the complete
-    // receipt. The extra bottom safety margin prevents the last dashed line,
-    // footer or text descender from touching the PNG boundary.
-    const images = Array.from(body.querySelectorAll("img"));
-    await Promise.all(images.map((img) => {
-      if (img.complete) return Promise.resolve();
-      return new Promise<void>((resolve) => {
-        img.addEventListener("load", () => resolve(), { once: true });
-        img.addEventListener("error", () => resolve(), { once: true });
-      });
-    }));
-    try { await frameDoc.fonts?.ready; } catch { /* font loading is optional */ }
-    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-
-    // scrollHeight is more reliable than getBoundingClientRect for long
-    // receipts because it includes content extending beyond the viewport.
-    const contentHeight = Math.max(
-      1,
-      Math.ceil(body.scrollHeight),
-      Math.ceil(body.offsetHeight),
-      Math.ceil(docEl?.scrollHeight || 0),
-    );
-
-    iframe.style.height = `${contentHeight}px`;
-
-    const capture = async (removeImages = false): Promise<string> => {
-      if (removeImages) body.querySelectorAll("img").forEach((img) => img.remove());
-
-      const canvas = await html2canvas(body, {
-        backgroundColor: "#ffffff",
-        scale: 2,
-        useCORS: true,
-        allowTaint: false,
-        logging: false,
-        width,
-        height: contentHeight,
-        windowWidth: width,
-        windowHeight: Math.max(contentHeight, 1000),
-        scrollX: 0,
-        scrollY: 0,
-        x: 0,
-        y: 0,
-      });
-
-      // Give the generated PNG a guaranteed white bottom safety area. This is
-      // deliberately small so it looks like a natural receipt margin.
-      const padded = document.createElement("canvas");
-      padded.width = canvas.width;
-      padded.height = canvas.height + 24;
-      const ctx = padded.getContext("2d");
-      if (!ctx) return canvas.toDataURL("image/png");
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, padded.width, padded.height);
-      ctx.drawImage(canvas, 0, 0);
-      return padded.toDataURL("image/png");
-    };
-
-    try {
-      return await capture(false);
-    } catch (firstError) {
-      // A remote shop logo can taint/fail the canvas. Retry without images so
-      // the customer still receives the complete bill rather than a cut-off
-      // or missing image.
-      try {
-        return await capture(true);
-      } catch (secondError) {
-        const first = String((firstError as any)?.message || firstError || "");
-        const second = String((secondError as any)?.message || secondError || "");
-        throw new Error(second || first || "Could not render the complete bill image.");
-      }
-    }
-  } finally {
-    iframe.remove();
+  // IMPORTANT: render the exact receipt HTML in Electron's Chromium page and
+  // capture that page. html2canvas was causing 1px/line-height and border
+  // compositing artefacts (dashed separators appearing through text) on some
+  // Windows builds. Chromium capturePage uses the same layout engine used for
+  // printing, so the WhatsApp image now matches the real invoice layout.
+  if (!window.electronAPI?.renderBillImage) {
+    throw new Error("The desktop bill-image renderer is unavailable. Rebuild the Windows app with the latest version.");
   }
+
+  const result = await window.electronAPI.renderBillImage(html, width);
+  if (!result?.success || !result.imageDataUrl) {
+    throw new Error(result?.errorType || "Could not render the complete bill image.");
+  }
+  return result.imageDataUrl;
 }
 
 export async function sendReceiptOnWhatsApp(opts: {

@@ -29,6 +29,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   initializeWhatsApp: () => ipcRenderer.invoke("whatsapp:initialize"),
   getWhatsAppStatus: () => ipcRenderer.invoke("whatsapp:status"),
   resetWhatsApp: () => ipcRenderer.invoke("whatsapp:reset"),
+  // Render the receipt with Chromium in the main process. This avoids the
+  // html2canvas line/border artefacts seen in WhatsApp bill PNGs.
+  renderBillImage: (html, widthPx) =>
+    ipcRenderer.invoke("render-bill-image", { html, widthPx }),
   sendBillImage: (base64Image, phone, message) =>
     ipcRenderer.invoke("send-bill-image", { base64Image, phone, message }),
   onWhatsAppQr: (callback) => {
