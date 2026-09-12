@@ -139,6 +139,19 @@ async function initializeWhatsApp(options = {}) {
   whatsappInitPromise = (async () => {
     whatsappInitializing = true;
     whatsappLastError = null;
+    // Resolves as soon as the very first connection outcome is known (open,
+    // QR needed, or closed/errored) so callers get an accurate ready state
+    // instead of a stale "not connected" while the handshake is still in
+    // flight in the background. Bounded by a timeout so a hung network can
+    // never block the caller forever.
+    let settleFirstOutcome = () => {};
+    const firstOutcome = new Promise((resolve) => { settleFirstOutcome = resolve; });
+    let firstOutcomeSettled = false;
+    const settleOnce = () => {
+      if (firstOutcomeSettled) return;
+      firstOutcomeSettled = true;
+      settleFirstOutcome();
+    };
     try {
       const { baileys: b, pino, QRCode: qrCode } = await loadWhatsAppDependencies();
       const {
@@ -226,6 +239,9 @@ async function initializeWhatsApp(options = {}) {
             whatsappLastError = whatsappErrorMessage(error);
             sendWhatsAppEvent("whatsapp-error", { error: whatsappLastError });
           }
+          // A QR means the handshake needs a scan before it can proceed —
+          // that is a known, final outcome for this call, not a connection.
+          settleOnce();
         }
 
         if (connection === "open") {
@@ -235,6 +251,7 @@ async function initializeWhatsApp(options = {}) {
           whatsappReconnectAttempts = 0;
           clearWhatsAppReconnectTimer();
           sendWhatsAppEvent("whatsapp-ready", { ready: true });
+          settleOnce();
           return;
         }
 
@@ -264,11 +281,13 @@ async function initializeWhatsApp(options = {}) {
           } else {
             sendWhatsAppEvent("whatsapp-error", { error: reason });
           }
+          settleOnce();
           }
         } catch (handlerError) {
           const safeError = whatsappErrorMessage(handlerError);
           whatsappLastError = safeError;
           sendWhatsAppEvent("whatsapp-error", { error: safeError });
+          settleOnce();
         }
       });
 
@@ -278,6 +297,17 @@ async function initializeWhatsApp(options = {}) {
       if (state.creds.registered) {
         sendWhatsAppEvent("whatsapp-authenticated", { authenticated: true });
       }
+
+      // Wait for the handshake to actually resolve (connected, needs a QR
+      // scan, or failed) before reporting a status. Without this, the very
+      // first call of a session would return "not ready" immediately — even
+      // though the socket goes on to connect a moment later in the
+      // background — which is why only the *second* bill previously showed
+      // WhatsApp as connected.
+      await Promise.race([
+        firstOutcome,
+        new Promise((resolve) => setTimeout(resolve, 20000)),
+      ]);
 
       return {
         ready: whatsappReady,

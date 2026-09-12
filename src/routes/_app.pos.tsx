@@ -106,6 +106,17 @@ function POS() {
   } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // Warm up the background WhatsApp (Baileys) connection as soon as the POS
+  // screen loads, instead of only starting it when the cashier presses
+  // "Send Bill". The handshake takes a few seconds; starting it early means
+  // it is normally already connected by the time a bill needs to go out,
+  // instead of the cashier feeling a delay on every send.
+  useEffect(() => {
+    if (!settings?.whatsapp_enabled) return;
+    if (!window.electronAPI?.initializeWhatsApp) return;
+    void window.electronAPI.initializeWhatsApp().catch(() => {});
+  }, [settings?.whatsapp_enabled]);
+
   // Products
   const { data: products = [] } = useQuery({
     queryKey: ["products", "pos"],
@@ -1318,6 +1329,7 @@ function WhatsAppSendDialog({
       const res = await sendReceiptOnWhatsApp({
         html: ask.html,
         phone,
+        message: ask.message,
         paperSize,
       });
       if (res.success) {
