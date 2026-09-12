@@ -175,14 +175,16 @@ export function buildReceiptHtml(opts: {
       margin: 1px 0 2px;
     }
     .hr {
-      border: 0; border-top: 1px dashed #000;
-      height: 0; line-height: 0; font-size: 0; margin: 8px 0;
-      clear: both;
+      display:block; width:100%; height:1px; min-height:1px;
+      border:0; border-top:1px dashed #000;
+      margin:8px 0; padding:0; line-height:0; font-size:0;
+      clear:both; box-sizing:border-box;
     }
     .hr2 {
-      border: 0; border-top: 1.5px solid #000;
-      height: 0; line-height: 0; font-size: 0; margin: 8px 0;
-      clear: both;
+      display:block; width:100%; height:2px; min-height:2px;
+      border:0; border-top:1.5px solid #000;
+      margin:8px 0; padding:0; line-height:0; font-size:0;
+      clear:both; box-sizing:border-box;
     }
     .row {
       display: grid;
@@ -193,18 +195,23 @@ export function buildReceiptHtml(opts: {
       line-height: 1.35;
     }
     .row > :last-child { text-align:right; min-width:0; }
-    table { width:100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
-    th, td { padding: 3px 2px; vertical-align: top; line-height: 1.3; }
-    th { font-weight: ${bold ? 800 : 500}; border-bottom: 1px solid #000; }
+    table { width:100%; border-collapse:collapse; border-spacing:0; table-layout:fixed; }
+    col.col-s { width:7%; }
+    col.col-desc { width:36%; }
+    col.col-qty { width:9%; }
+    col.col-mrp, col.col-rate, col.col-amt { width:16%; }
+    th, td { padding: 3px 2px; vertical-align:top; line-height:1.25; border:0; }
+    thead th { font-weight:${bold ? 800 : 500}; border-bottom:1.5px solid #000; white-space:nowrap; }
+    tbody td { border:0; }
     .c { text-align:center; }
-    .r { text-align:right; font-variant-numeric: tabular-nums; }
-    .desc { word-break: break-word; overflow-wrap:anywhere; }
-    tbody tr { break-inside: avoid; page-break-inside: avoid; }
-    .copy { break-inside: avoid; }
+    .r { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .desc { text-align:left; word-break:normal; overflow-wrap:anywhere; white-space:normal; padding-left:4px; padding-right:4px; }
+    tbody tr { break-inside:avoid; page-break-inside:avoid; }
+    .copy { break-inside:avoid; }
 
-    th.s, td.c:first-child { width: 7%; }
-    th.q, td.r.q { width: 9%; }
-    th.m, th.rt, th.a { width: 16%; }
+    th.s, td.c:first-child { width:7%; }
+    th.q, td.r.q { width:9%; }
+    th.m, th.rt, th.a { width:16%; }
     .sumLeft { font-weight: ${bold ? 800 : 500}; }
     .gtotal { font-weight: ${bold ? 900 : 600}; font-size:${fontSize + 2}px; }
     .copy { page-break-after: always; }
@@ -228,7 +235,15 @@ export function buildReceiptHtml(opts: {
     <div class="row"><span>GSTIN : ${escapeHtml(cgstin)}</span><span>Time :  ${timeStr}</span></div>
 
     <div class="hr"></div>
-    <table>
+    <table class="items-table">
+      <colgroup>
+        <col class="col-s" />
+        <col class="col-desc" />
+        <col class="col-qty" />
+        <col class="col-mrp" />
+        <col class="col-rate" />
+        <col class="col-amt" />
+      </colgroup>
       <thead>
         <tr>
           <th class="s c">S.</th>

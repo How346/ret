@@ -370,9 +370,16 @@ ipcMain.handle("render-bill-image", async (_event, payload) => {
     tmpFile = path.join(os.tmpdir(), `margin-erp-wa-render-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
     fs.writeFileSync(tmpFile, html, "utf8");
 
+    // Render the receipt at 3x raster resolution.  The receipt HTML keeps its
+    // original physical paper width (58/80mm), while the whole document is
+    // transformed for capture. This preserves the exact column wrapping and
+    // makes small receipt text/lines much sharper in WhatsApp.
+    const renderScale = 3;
+    const captureWidth = width * renderScale;
+
     shotWin = new BrowserWindow({
       show: false,
-      width,
+      width: captureWidth,
       height: 1000,
       x: -10000,
       y: -10000,
@@ -383,16 +390,23 @@ ipcMain.handle("render-bill-image", async (_event, payload) => {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        backgroundThrottling: false,
       },
     });
 
     await shotWin.loadFile(tmpFile);
     await shotWin.webContents.executeJavaScript(`
       (async () => {
-        document.documentElement.style.width = '${width}px';
-        document.body.style.width = '${width}px';
-        document.body.style.maxWidth = '${width}px';
+        const scale = ${renderScale};
+        // Do NOT force the receipt to the capture width: its CSS millimetre
+        // width is what controls the correct Description/Qty/MRP/RATE/Amt
+        // layout. We only scale the finished page for a high-resolution PNG.
+        document.documentElement.style.overflow = 'visible';
         document.body.style.overflow = 'visible';
+        document.body.style.transformOrigin = 'top left';
+        document.body.style.transform = 'scale(' + scale + ')';
+        document.body.style.width = document.body.getBoundingClientRect().width + 'px';
+        document.documentElement.style.width = Math.ceil(document.body.getBoundingClientRect().width * scale) + 'px';
         try { if (document.fonts?.ready) await document.fonts.ready; } catch (_) {}
         const imgs = Array.from(document.images || []);
         await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => {
@@ -405,23 +419,23 @@ ipcMain.handle("render-bill-image", async (_event, payload) => {
     `, true);
 
     const size = await shotWin.webContents.executeJavaScript(`({
-      width: ${width},
+      width: Math.ceil(document.body.getBoundingClientRect().width),
       height: Math.ceil(Math.max(
         document.documentElement.scrollHeight || 0,
         document.body?.scrollHeight || 0,
         document.documentElement.offsetHeight || 0,
         document.body?.offsetHeight || 0
-      ))
+      ) * ${renderScale})
     })`, true);
 
-    const height = Math.max(120, Math.min(10000, Number(size?.height) || 600));
-    shotWin.setSize(width, height);
+    // Crop the PNG to the actual receipt width instead of including a large
+    // white strip. The receipt itself is still rendered at 3x resolution.
+    const actualCaptureWidth = Math.max(300, Math.min(3600, Number(size?.width) || captureWidth));
+    const height = Math.max(360, Math.min(30000, Number(size?.height) || 1800));
+    shotWin.setSize(actualCaptureWidth, height);
     await shotWin.webContents.executeJavaScript(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`, true);
 
-    try { shotWin.showInactive(); } catch {}
-    await new Promise(r => setTimeout(r, 100));
-
-    const image = await shotWin.webContents.capturePage({ x: 0, y: 0, width, height });
+    const image = await shotWin.webContents.capturePage({ x: 0, y: 0, width: actualCaptureWidth, height });
     if (!image || image.isEmpty()) return { success: false, errorType: "Chromium returned an empty bill image." };
 
     const png = image.toPNG();
