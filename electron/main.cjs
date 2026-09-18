@@ -738,6 +738,18 @@ ipcMain.handle("print:raw", async (_event, payload) => {
       return { success: false, errorType: "Raw .prn label printing is supported on Windows desktop builds." };
     }
 
+    // Fail early with a useful message if the saved printer was removed or
+    // renamed in Windows. The renderer stores the stable OS printer name.
+    try {
+      const available = mainWindow?.webContents && await mainWindow.webContents.getPrintersAsync();
+      if (Array.isArray(available) && available.length && !available.some(p => String(p.name || "") === printerName)) {
+        return { success: false, errorType: `Selected label printer is not available in Windows: ${printerName}. Open Settings → Barcode label printer and select it again.` };
+      }
+    } catch {
+      // If enumeration is unavailable, let the Win32 spooler report the real
+      // error below rather than blocking printing.
+    }
+
     tmpFile = path.join(os.tmpdir(), `margin-erp-${Date.now()}-${Math.random().toString(36).slice(2)}.prn`);
     fs.writeFileSync(tmpFile, Buffer.from(data, "utf8"));
 

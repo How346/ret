@@ -190,38 +190,49 @@ function tsplEscape(s: string): string {
 
 /** Build a single 2-up print pass matching user's TSPL template. */
 export function buildFixedLabelPair(left: FixedLabel, right?: FixedLabel | null): string {
-  const r = right ?? left;
-  const line = (l: FixedLabel, x: number) => [
-    `TEXT ${x},175,"0",180,12,12,"${tsplEscape(l.shop || "MART").toUpperCase()}"`,
-    `TEXT ${x},135,"0",180,10,10,"${tsplEscape(l.name)}"`,
-    `BARCODE ${x},70,"128M",38,0,180,2,4,"${tsplEscape(l.code)}"`,
-    `TEXT ${x},30,"0",180,10,10,"${tsplEscape(l.code)}"`,
-    `TEXT ${x},100,"0",180,10,10,"MRP:${l.mrp ?? ""} PRICE:${l.price ?? ""}"`,
-  ].join("\r\n");
-  return [
-    "CLS",
-    "SIZE 76 mm, 25 mm",
+  // TSC TTP-244 Pro at 203 DPI: 8 dots/mm.
+  // Two 25 mm labels + 2 mm gap fit safely inside a 76 mm media width.
+  const leftX = 96;
+  const rightX = 312;
+  const label = (l: FixedLabel, x: number) => {
+    const name = tsplEscape(l.name || "PRODUCT").slice(0, 22);
+    const shop = tsplEscape(l.shop || "MART").toUpperCase().slice(0, 18);
+    const code = tsplEscape(l.code || "").slice(0, 20);
+    const mrp = l.mrp == null ? "" : String(l.mrp);
+    const price = l.price == null ? "" : String(l.price);
+
+    return [
+      `TEXT ${x + 4},12,"2",0,1,1,"${name}"`,
+      `TEXT ${x + 4},38,"1",0,1,1,"${shop}"`,
+      `TEXT ${x + 4},62,"1",0,1,1,"MRP:${tsplEscape(mrp)} PRICE:${tsplEscape(price)}"`,
+      // 128M is supported by TSC TSPL and keeps the barcode compact enough
+      // for a 25 mm wide label. HRI is enabled so the code is also readable.
+      `BARCODE ${x + 4},88,"128M",100,1,0,2,2,"${code}"`,
+    ].join("\r\n");
+  };
+
+  const lines = [
+    "SIZE 76 mm, 38 mm",
     "GAP 2 mm, 0 mm",
-    "SPEED 2",
-    "DENSITY 5",
-    "DIRECTION 0,0",
+    "SPEED 3",
+    "DENSITY 8",
+    "DIRECTION 1",
     "REFERENCE 0,0",
     "OFFSET 0 mm",
-    "SHIFT 0",
     "SET PEEL OFF",
     "SET CUTTER OFF",
     "SET TEAR ON",
-    "CLS",
     "CODEPAGE 850",
-    "; ================= LEFT LABEL =================",
-    line(left, 290),
-    "; ================= RIGHT LABEL =================",
-    line(r, 594),
-    "PRINT 1,1",
-  ].join("\r\n") + "\r\n";
+    "CLS",
+    label(left, leftX),
+  ];
+
+  if (right) lines.push(label(right, rightX));
+  lines.push("PRINT 1,1");
+  return lines.join("\r\n") + "\r\n";
 }
 
-/** Build the whole job: pairs of labels, one PRINT per pair. */
+/** Build the whole job: pairs of labels, one PRINT per physical row. */
 export function buildFixedLabelJob(items: FixedLabel[]): string {
   if (!items.length) return "";
   const out: string[] = [];
