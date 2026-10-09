@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, useDeferredValue } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -121,14 +121,24 @@ function POS() {
   const { data: products = [] } = useQuery({
     queryKey: ["products", "pos"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("products")
-        .select("id,name,sku,barcode,hsn_code,mrp,sale_price,wholesale_price,gst_rate,stock,unit,image_url")
-        .eq("is_active", true)
-        .order("name")
-        .limit(500);
-      if (error) throw error;
-      return data as Product[];
+      // Supabase/PostgREST returns a bounded page by default. Fetch every active
+      // product in small pages so the POS and Ctrl+I picker never silently stop
+      // at the first 500 items. Keep each request bounded to avoid large payloads.
+      const pageSize = 1000;
+      const all: Product[] = [];
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from("products")
+          .select("id,name,sku,barcode,hsn_code,mrp,sale_price,wholesale_price,gst_rate,stock,unit,image_url")
+          .eq("is_active", true)
+          .order("name")
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        const page = (data ?? []) as Product[];
+        all.push(...page);
+        if (page.length < pageSize) break;
+      }
+      return all;
     },
   });
 
@@ -156,23 +166,40 @@ function POS() {
     },
   });
 
-  // Products that have an image are surfaced first in the POS grid.
-  const imagesFirst = useCallback((list: Product[]) =>
-    [...list].sort((a, b) => (a.image_url ? 0 : 1) - (b.image_url ? 0 : 1)), []);
+  // Pre-sort once per product refresh, not on every keypress. Defer typing-driven
+  // filtering so a large catalogue does not block product clicks or barcode input.
+  const deferredSearch = useDeferredValue(search);
+  const imagesFirst = useMemo(() =>
+    [...products].sort((a, b) => Number(Boolean(b.image_url)) - Number(Boolean(a.image_url))), [products]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return imagesFirst(products).slice(0, 60);
-    return imagesFirst(products.filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      p.sku?.toLowerCase().includes(q) ||
-      p.barcode?.toLowerCase().includes(q)
-    )).slice(0, 60);
-  }, [search, products, imagesFirst]);
+    const q = deferredSearch.trim().toLocaleLowerCase();
+    const source = imagesFirst;
+    if (!q) return source.slice(0, 60);
+    const matches: Product[] = [];
+    for (const p of source) {
+      if (p.name.toLocaleLowerCase().includes(q) ||
+          (p.sku ?? "").toLocaleLowerCase().includes(q) ||
+          (p.barcode ?? "").toLocaleLowerCase().includes(q)) {
+        matches.push(p);
+        if (matches.length >= 60) break;
+      }
+    }
+    return matches;
+  }, [deferredSearch, imagesFirst]);
 
+  const variantsByProduct = useMemo(() => {
+    const map = new Map<string, Variant[]>();
+    for (const variant of variants) {
+      const group = map.get(variant.product_id);
+      if (group) group.push(variant);
+      else map.set(variant.product_id, [variant]);
+    }
+    return map;
+  }, [variants]);
   const variantsFor = useCallback(
-    (pid: string) => variants.filter(v => v.product_id === pid),
-    [variants]);
+    (pid: string) => variantsByProduct.get(pid) ?? [],
+    [variantsByProduct]);
 
   const priceFor = useCallback((p: Product) =>
     priceLevel === "mrp" ? p.mrp : priceLevel === "wholesale" ? p.wholesale_price : p.sale_price,
@@ -885,31 +912,56 @@ function ProductPickerDialog({
   onPick: (p: any) => void;
 }) {
   const [q, setQ] = useState("");
+  const deferredQ = useDeferredValue(q);
   const [hi, setHi] = useState(0);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(360);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const rowHeight = 42;
 
+  // Search the complete catalogue but render only the visible window. This
+  // avoids mounting thousands of DOM rows and keeps Ctrl+I responsive.
   const filtered = useMemo(() => {
-    const term = q.trim().toLowerCase();
-    if (!term) return products.slice(0, 200);
-    return products.filter((p) =>
-      p.name.toLowerCase().includes(term) ||
-      (p.barcode ?? "").toLowerCase().includes(term) ||
-      (p.sku ?? "").toLowerCase().includes(term),
-    ).slice(0, 200);
-  }, [q, products]);
+    const term = deferredQ.trim().toLocaleLowerCase();
+    if (!term) return products;
+    const matches: typeof products = [];
+    for (const p of products) {
+      if (p.name.toLocaleLowerCase().includes(term) ||
+          (p.barcode ?? "").toLocaleLowerCase().includes(term) ||
+          (p.sku ?? "").toLocaleLowerCase().includes(term)) matches.push(p);
+    }
+    return matches;
+  }, [deferredQ, products]);
+  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - 8);
+  const endIndex = Math.min(filtered.length, Math.ceil((scrollTop + viewportHeight) / rowHeight) + 8);
+  const visibleProducts = filtered.slice(startIndex, endIndex);
 
   useEffect(() => {
     if (open) {
       setQ("");
       setHi(0);
+      setScrollTop(0);
       setTimeout(() => searchInputRef.current?.focus(), 30);
     }
   }, [open]);
-  useEffect(() => { setHi(0); }, [q]);
+  useEffect(() => { setHi(0); setScrollTop(0); if (listRef.current) listRef.current.scrollTop = 0; }, [deferredQ]);
   useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>(`[data-idx="${hi}"]`)?.scrollIntoView({ block: "nearest" });
+    const el = listRef.current;
+    if (!el) return;
+    const top = hi * rowHeight;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + rowHeight > el.scrollTop + el.clientHeight) el.scrollTop = top + rowHeight - el.clientHeight;
   }, [hi]);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const update = () => setViewportHeight(el.clientHeight || 360);
+    update();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
+    observer?.observe(el);
+    return () => observer?.disconnect();
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -931,28 +983,41 @@ function ProductPickerDialog({
             }}
           />
         </div>
-        <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto border rounded-md divide-y">
-          {filtered.length === 0 && (
+        <div
+          ref={listRef}
+          onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+          className="flex-1 min-h-0 overflow-y-auto border rounded-md"
+          role="listbox"
+          aria-label="All products"
+        >
+          {filtered.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground text-center">No items match "{q}"</div>
+          ) : (
+            <div style={{ height: filtered.length * rowHeight, position: "relative" }}>
+              {visibleProducts.map((p, offset) => {
+                const idx = startIndex + offset;
+                return <button
+                  key={p.id}
+                  type="button"
+                  data-idx={idx}
+                  role="option"
+                  aria-selected={idx === hi}
+                  onMouseEnter={() => setHi(idx)}
+                  onClick={() => onPick(p)}
+                  style={{ position: "absolute", top: idx * rowHeight, height: rowHeight, left: 0, right: 0 }}
+                  className={`w-full text-left px-3 text-sm flex items-center justify-between gap-3 border-b border-border/60 ${idx === hi ? "bg-accent" : ""}`}
+                >
+                  <span className="truncate min-w-0">{p.name}</span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs font-mono text-muted-foreground">{p.barcode || p.sku || "—"}</span>
+                    <span className="text-xs font-mono">{inr(p.sale_price)}</span>
+                  </span>
+                </button>;
+              })}
+            </div>
           )}
-          {filtered.map((p, idx) => (
-            <button
-              key={p.id}
-              type="button"
-              data-idx={idx}
-              onMouseEnter={() => setHi(idx)}
-              onClick={() => onPick(p)}
-              className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-3 ${idx === hi ? "bg-accent" : ""}`}
-            >
-              <span className="truncate">{p.name}</span>
-              <span className="flex items-center gap-2 shrink-0">
-                <span className="text-xs font-mono text-muted-foreground">{p.barcode || p.sku || "—"}</span>
-                <span className="text-xs font-mono">{inr(p.sale_price)}</span>
-              </span>
-            </button>
-          ))}
         </div>
-        <div className="text-xs text-muted-foreground">↑↓ to move · Enter to add · Esc to close</div>
+        <div className="text-xs text-muted-foreground">{filtered.length.toLocaleString()} items · ↑↓ to move · Enter to add · Esc to close</div>
       </DialogContent>
     </Dialog>
   );
